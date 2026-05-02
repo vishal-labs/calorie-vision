@@ -305,6 +305,60 @@ body {
     gap: 24px;
 }
 
+.home-actions {
+    display: flex;
+    gap: 10px;
+}
+
+.home-actions .btn-scan {
+    flex: 1;
+}
+
+.btn-manual {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 14px 18px;
+    border-radius: var(--radius-lg);
+    font-size: 0.85rem;
+}
+
+/* Manual Add View */
+.manual-container {
+    flex: 1;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.manual-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+}
+
+.manual-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.manual-macros-row {
+    display: flex;
+    gap: 10px;
+}
+
+.manual-macros-row .setting-group {
+    flex: 1;
+}
+
+.manual-macros-row .text-input {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+}
+
 .btn-scan {
     width: 100%;
     padding: 18px;

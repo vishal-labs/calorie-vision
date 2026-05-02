@@ -135,6 +135,7 @@
     const views = {
         login: $("view-login"),
         home: $("view-home"),
+        manual: $("view-manual"),
         camera: $("view-camera"),
         review: $("view-review"),
         loading: $("view-loading"),
@@ -485,6 +486,54 @@
     }
 
     // ──────────────────────────────────────────
+    // MANUAL ADD
+    // ──────────────────────────────────────────
+    function openManualAdd() {
+        $('manual-name').value = '';
+        $('manual-calories').value = '';
+        $('manual-protein').value = '';
+        $('manual-carbs').value = '';
+        $('manual-fat').value = '';
+        $('manual-desc').value = '';
+        showView('manual');
+    }
+
+    function saveManualMeal() {
+        const name = $('manual-name').value.trim();
+        const calories = parseInt($('manual-calories').value, 10);
+        if (!name || isNaN(calories) || calories <= 0) {
+            alert('Please enter a meal name and valid calorie count.');
+            return;
+        }
+
+        const protein = parseInt($('manual-protein').value, 10) || 0;
+        const carbs = parseInt($('manual-carbs').value, 10) || 0;
+        const fat = parseInt($('manual-fat').value, 10) || 0;
+        const desc = $('manual-desc').value.trim();
+        const displayName = desc ? `${name} — ${desc}` : name;
+
+        const data = getTodayData();
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        data.consumed += calories;
+        data.meals.push({
+            name: displayName,
+            calories: calories,
+            protein: protein,
+            carbs: carbs,
+            fat: fat,
+            time: timeStr,
+        });
+
+        saveTodayData(data);
+        updateHeader();
+        renderMealLog();
+        renderHistory();
+        showView('home');
+    }
+
+    // ──────────────────────────────────────────
     // SETTINGS
     // ──────────────────────────────────────────
     function openSettings() {
@@ -549,6 +598,11 @@
 
         // Home
         $("btn-scan").addEventListener("click", startCamera);
+        $("btn-manual").addEventListener("click", openManualAdd);
+
+        // Manual Add
+        $("btn-manual-cancel").addEventListener("click", () => showView("home"));
+        $("btn-manual-save").addEventListener("click", saveManualMeal);
 
         // Camera
         $("btn-camera-back").addEventListener("click", () => {

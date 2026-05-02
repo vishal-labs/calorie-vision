@@ -54,13 +54,22 @@
 
     <!-- ───── VIEW: HOME ───── -->
     <main id="view-home" class="view">
-        <button id="btn-scan" class="btn-primary btn-scan">
-            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                <circle cx="12" cy="13" r="4"/>
-            </svg>
-            Scan Meal
-        </button>
+        <div class="home-actions">
+            <button id="btn-scan" class="btn-primary btn-scan">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+                Scan Meal
+            </button>
+            <button id="btn-manual" class="btn-secondary btn-manual">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Add Manually
+            </button>
+        </div>
 
         <section id="today-meals" class="meal-log">
             <h2 class="section-title">Today's Meals</h2>
@@ -74,6 +83,50 @@
             <div id="history-list" class="history-list"></div>
         </section>
     </main>
+
+    <!-- ───── VIEW: MANUAL ADD ───── -->
+    <div id="view-manual" class="view">
+        <div class="manual-container">
+            <h2 class="manual-title">Add Meal Manually</h2>
+
+            <div class="manual-form">
+                <div class="setting-group">
+                    <label for="manual-name" class="setting-label">Meal Name *</label>
+                    <input type="text" id="manual-name" class="text-input" placeholder="e.g. Chicken Salad" autocomplete="off">
+                </div>
+
+                <div class="setting-group">
+                    <label for="manual-calories" class="setting-label">Calories (kcal) *</label>
+                    <input type="number" id="manual-calories" class="text-input" placeholder="e.g. 450" min="0" max="10000">
+                </div>
+
+                <div class="manual-macros-row">
+                    <div class="setting-group">
+                        <label for="manual-protein" class="setting-label">Protein (g)</label>
+                        <input type="number" id="manual-protein" class="text-input" placeholder="0" min="0">
+                    </div>
+                    <div class="setting-group">
+                        <label for="manual-carbs" class="setting-label">Carbs (g)</label>
+                        <input type="number" id="manual-carbs" class="text-input" placeholder="0" min="0">
+                    </div>
+                    <div class="setting-group">
+                        <label for="manual-fat" class="setting-label">Fat (g)</label>
+                        <input type="number" id="manual-fat" class="text-input" placeholder="0" min="0">
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <label for="manual-desc" class="setting-label">Description (optional)</label>
+                    <input type="text" id="manual-desc" class="text-input" placeholder="e.g. Homemade, light dressing" autocomplete="off">
+                </div>
+            </div>
+
+            <div class="review-actions">
+                <button id="btn-manual-cancel" class="btn-secondary">Cancel</button>
+                <button id="btn-manual-save" class="btn-primary btn-consume">Add Meal</button>
+            </div>
+        </div>
+    </div>
 
     <!-- ───── VIEW: CAMERA ───── -->
     <div id="view-camera" class="view">
