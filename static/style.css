@@ -346,10 +346,16 @@ body {
     gap: 8px;
 }
 
-.home-actions .btn-scan {
+.home-actions .btn-scan,
+.home-actions .btn-barcode {
     flex: 1;
-    font-size: 0.85rem;
-    padding: 14px 10px;
+    font-size: 0.9rem;
+    padding: 14px 8px;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
 }
 
 .btn-upload,
