@@ -6,50 +6,87 @@
     "use strict";
 
     // ──────────────────────────────────────────
-    // STORAGE KEYS
+    // PROFILE & STORAGE KEYS
     // ──────────────────────────────────────────
-    const KEYS = {
-        budget: "calorieVision_budget",
-        data: "calorieVision_data",      // { date, consumed, meals[] }
-        history: "calorieVision_history", // [{ date, consumed, meals[] }, ...] (last 3 days)
-        name: "calorieVision_name",
+    const GLOBAL_KEYS = {
+        profiles: "calorieVision_profiles",   // ["alice", "bob", ...]
+        activeUser: "calorieVision_activeUser", // "alice"
     };
 
     const DEFAULT_BUDGET = 2000;
     const HISTORY_DAYS = 3;
 
+    // Per-user key helpers — all data is namespaced by username
+    function userKey(base) {
+        return `calorieVision_${activeUser}_${base}`;
+    }
+
     // ──────────────────────────────────────────
     // STATE
     // ──────────────────────────────────────────
+    let activeUser = null;
     let cameraStream = null;
     let capturedBase64 = null;
     let lastAnalysisResult = null;
 
     // ──────────────────────────────────────────
-    // STORAGE HELPERS
+    // PROFILE MANAGEMENT
+    // ──────────────────────────────────────────
+    function getProfiles() {
+        const raw = localStorage.getItem(GLOBAL_KEYS.profiles);
+        if (raw) {
+            try { return JSON.parse(raw); } catch (_) { /* ignore */ }
+        }
+        return [];
+    }
+
+    function saveProfiles(profiles) {
+        localStorage.setItem(GLOBAL_KEYS.profiles, JSON.stringify(profiles));
+    }
+
+    function setActiveUser(username) {
+        activeUser = username;
+        localStorage.setItem(GLOBAL_KEYS.activeUser, username);
+    }
+
+    function getActiveUser() {
+        return localStorage.getItem(GLOBAL_KEYS.activeUser) || null;
+    }
+
+    function createProfile(name) {
+        const profiles = getProfiles();
+        const normalized = name.trim();
+        if (!normalized) return null;
+        // Check for duplicate (case-insensitive)
+        if (profiles.some((p) => p.toLowerCase() === normalized.toLowerCase())) {
+            return normalized; // Already exists, just log in
+        }
+        profiles.push(normalized);
+        saveProfiles(profiles);
+        return normalized;
+    }
+
+    // ──────────────────────────────────────────
+    // STORAGE HELPERS (per-user)
     // ──────────────────────────────────────────
     function todayStr() {
         return new Date().toISOString().slice(0, 10);
     }
 
     function getBudget() {
-        return parseInt(localStorage.getItem(KEYS.budget), 10) || DEFAULT_BUDGET;
+        return parseInt(localStorage.getItem(userKey("budget")), 10) || DEFAULT_BUDGET;
     }
 
     function setBudget(val) {
-        localStorage.setItem(KEYS.budget, val.toString());
+        localStorage.setItem(userKey("budget"), val.toString());
     }
 
     function getName() {
-        return localStorage.getItem(KEYS.name) || "";
-    }
-
-    function setName(name) {
-        localStorage.setItem(KEYS.name, name);
+        return activeUser || "";
     }
 
     function getTodayData() {
-        const raw = localStorage.getItem(KEYS.data);
+        const raw = localStorage.getItem(userKey("data"));
         if (raw) {
             try {
                 const parsed = JSON.parse(raw);
@@ -59,16 +96,16 @@
         // Day rolled over or first use — archive old data
         archiveOldDay();
         const fresh = { date: todayStr(), consumed: 0, meals: [] };
-        localStorage.setItem(KEYS.data, JSON.stringify(fresh));
+        localStorage.setItem(userKey("data"), JSON.stringify(fresh));
         return fresh;
     }
 
     function saveTodayData(data) {
-        localStorage.setItem(KEYS.data, JSON.stringify(data));
+        localStorage.setItem(userKey("data"), JSON.stringify(data));
     }
 
     function archiveOldDay() {
-        const raw = localStorage.getItem(KEYS.data);
+        const raw = localStorage.getItem(userKey("data"));
         if (!raw) return;
         try {
             const old = JSON.parse(raw);
@@ -76,15 +113,14 @@
             if (old.meals && old.meals.length > 0) {
                 const history = getHistory();
                 history.unshift({ date: old.date, consumed: old.consumed, meals: old.meals });
-                // Keep only last N days
                 while (history.length > HISTORY_DAYS) history.pop();
-                localStorage.setItem(KEYS.history, JSON.stringify(history));
+                localStorage.setItem(userKey("history"), JSON.stringify(history));
             }
         } catch (_) { /* ignore */ }
     }
 
     function getHistory() {
-        const raw = localStorage.getItem(KEYS.history);
+        const raw = localStorage.getItem(userKey("history"));
         if (raw) {
             try { return JSON.parse(raw); } catch (_) { /* ignore */ }
         }
@@ -97,6 +133,7 @@
     const $ = (id) => document.getElementById(id);
 
     const views = {
+        login: $("view-login"),
         home: $("view-home"),
         camera: $("view-camera"),
         review: $("view-review"),
@@ -106,6 +143,8 @@
     };
 
     const els = {
+        profileList: $("profile-list"),
+        newProfileName: $("new-profile-name"),
         greeting: $("greeting"),
         calorieStatus: $("calorie-status"),
         progressBar: $("progress-bar"),
@@ -132,13 +171,65 @@
         Object.values(views).forEach((v) => v.classList.remove("active"));
         views[name].classList.add("active");
 
-        // Show/hide header on camera/loading views
+        // Show/hide header on login/camera/loading views
         const header = $("app-header");
-        if (name === "camera" || name === "loading") {
+        if (name === "login" || name === "camera" || name === "loading") {
             header.style.display = "none";
         } else {
             header.style.display = "";
         }
+    }
+
+    // ──────────────────────────────────────────
+    // LOGIN UI
+    // ──────────────────────────────────────────
+    function renderProfileList() {
+        const profiles = getProfiles();
+        if (profiles.length === 0) {
+            els.profileList.innerHTML = "";
+            return;
+        }
+        els.profileList.innerHTML = profiles
+            .map((name) => `
+                <div class="profile-card" data-profile="${escapeHtml(name)}">
+                    <div class="profile-avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div>
+                    <span class="profile-card-name">${escapeHtml(name)}</span>
+                </div>
+            `)
+            .join("");
+
+        // Attach click handlers
+        els.profileList.querySelectorAll(".profile-card").forEach((card) => {
+            card.addEventListener("click", () => {
+                loginAs(card.dataset.profile);
+            });
+        });
+    }
+
+    function loginAs(username) {
+        setActiveUser(username);
+        updateHeader();
+        renderMealLog();
+        renderHistory();
+        showView("home");
+    }
+
+    function handleCreateProfile() {
+        const name = els.newProfileName.value.trim();
+        if (!name) {
+            els.newProfileName.focus();
+            return;
+        }
+        createProfile(name);
+        els.newProfileName.value = "";
+        loginAs(name);
+    }
+
+    function switchProfile() {
+        activeUser = null;
+        localStorage.removeItem(GLOBAL_KEYS.activeUser);
+        renderProfileList();
+        showView("login");
     }
 
     // ──────────────────────────────────────────
@@ -403,8 +494,15 @@
     }
 
     function saveSettings() {
-        const name = els.settingName.value.trim();
-        setName(name);
+        // Name change — update profile list and active user
+        const newName = els.settingName.value.trim();
+        if (newName && newName !== activeUser) {
+            const profiles = getProfiles();
+            const idx = profiles.indexOf(activeUser);
+            if (idx !== -1) profiles[idx] = newName;
+            saveProfiles(profiles);
+            setActiveUser(newName);
+        }
 
         const budget = parseInt(els.settingBudget.value, 10);
         if (budget && budget >= 500 && budget <= 10000) {
@@ -443,6 +541,12 @@
     // EVENT LISTENERS
     // ──────────────────────────────────────────
     function init() {
+        // Login
+        $("btn-create-profile").addEventListener("click", handleCreateProfile);
+        $("new-profile-name").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") handleCreateProfile();
+        });
+
         // Home
         $("btn-scan").addEventListener("click", startCamera);
 
@@ -469,11 +573,16 @@
         $("btn-settings").addEventListener("click", openSettings);
         $("btn-settings-back").addEventListener("click", saveSettings);
         $("btn-reset-today").addEventListener("click", resetToday);
+        $("btn-switch-profile").addEventListener("click", switchProfile);
 
-        // Initial render
-        updateHeader();
-        renderMealLog();
-        renderHistory();
+        // Check if there's an active session
+        const savedUser = getActiveUser();
+        if (savedUser && getProfiles().includes(savedUser)) {
+            loginAs(savedUser);
+        } else {
+            renderProfileList();
+            showView("login");
+        }
     }
 
     // Kick off

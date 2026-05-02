@@ -11,6 +11,23 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    <!-- ───── VIEW: LOGIN ───── -->
+    <div id="view-login" class="view active">
+        <div class="login-container">
+            <div class="login-header">
+                <span class="login-logo">⚡</span>
+                <h1 class="login-title">Calorie Vision</h1>
+                <p class="login-subtitle">Select your profile to continue</p>
+            </div>
+            <div id="profile-list" class="profile-list"></div>
+            <div class="login-divider"><span>or create new</span></div>
+            <div class="login-form">
+                <input type="text" id="new-profile-name" class="text-input" placeholder="Enter your name" autocomplete="off" maxlength="20">
+                <button id="btn-create-profile" class="btn-primary">Get Started</button>
+            </div>
+        </div>
+    </div>
+
     <!-- ───── HEADER ───── -->
     <header id="app-header">
         <div class="header-top">
@@ -36,7 +53,7 @@
     </header>
 
     <!-- ───── VIEW: HOME ───── -->
-    <main id="view-home" class="view active">
+    <main id="view-home" class="view">
         <button id="btn-scan" class="btn-primary btn-scan">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -142,6 +159,10 @@
 
             <div class="setting-group">
                 <button id="btn-reset-today" class="btn-danger">Reset Today's Data</button>
+            </div>
+
+            <div class="setting-group">
+                <button id="btn-switch-profile" class="btn-secondary" style="width:100%">Switch Profile</button>
             </div>
 
             <button id="btn-settings-back" class="btn-primary settings-save">Save & Back</button>
