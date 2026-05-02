@@ -127,6 +127,18 @@
         return [];
     }
 
+    function getPresets() {
+        const raw = localStorage.getItem(userKey("presets"));
+        if (raw) {
+            try { return JSON.parse(raw); } catch (_) { /* ignore */ }
+        }
+        return [];
+    }
+
+    function savePresets(presets) {
+        localStorage.setItem(userKey("presets"), JSON.stringify(presets));
+    }
+
     // ──────────────────────────────────────────
     // DOM REFERENCES
     // ──────────────────────────────────────────
@@ -169,6 +181,10 @@
         btnExportData: $("btn-export-data"),
         btnImportData: $("btn-import-data"),
         fileImport: $("file-import"),
+        manualPresets: $("manual-presets"),
+        btnDeletePreset: $("btn-delete-preset"),
+        manualSavePreset: $("manual-save-preset"),
+        presetSelectorGroup: $("preset-selector-group"),
     };
 
     // ──────────────────────────────────────────
@@ -571,7 +587,23 @@
     // ──────────────────────────────────────────
     // MANUAL ADD / EDIT
     // ──────────────────────────────────────────
+    function renderPresetsDropdown() {
+        const presets = getPresets();
+        let html = '<option value="">Custom Entry...</option>';
+        presets.forEach((p, idx) => {
+            html += `<option value="${idx}">${escapeHtml(p.name)} (${p.calories} kcal)</option>`;
+        });
+        if (els.manualPresets) {
+            els.manualPresets.innerHTML = html;
+            els.manualPresets.value = "";
+        }
+        if (els.btnDeletePreset) els.btnDeletePreset.style.display = "none";
+        if (els.presetSelectorGroup) els.presetSelectorGroup.style.display = "";
+        if (els.manualSavePreset) els.manualSavePreset.checked = false;
+    }
+
     function openManualAdd() {
+        renderPresetsDropdown();
         $('manual-title').textContent = 'Add Meal Manually';
         $('manual-save-text').textContent = 'Add Meal';
         $('manual-edit-index').value = '-1';
@@ -592,6 +624,7 @@
         $('manual-title').textContent = 'Edit Meal';
         $('manual-save-text').textContent = 'Save Changes';
         $('manual-edit-index').value = index.toString();
+        if (els.presetSelectorGroup) els.presetSelectorGroup.style.display = "none";
 
         // Parse name — if it contains ' — ', split into name and description
         const parts = meal.name.split(' — ');
@@ -621,6 +654,19 @@
         const editIndex = parseInt($('manual-edit-index').value, 10);
 
         const data = getTodayData();
+
+        // Preset saving logic
+        if (els.presetSelectorGroup && els.presetSelectorGroup.style.display !== "none" && els.manualSavePreset && els.manualSavePreset.checked) {
+            const presets = getPresets();
+            const existingIdx = presets.findIndex(p => p.name.toLowerCase() === name.toLowerCase());
+            const newPreset = { name, calories, protein, carbs, fat };
+            if (existingIdx >= 0) {
+                presets[existingIdx] = newPreset;
+            } else {
+                presets.push(newPreset);
+            }
+            savePresets(presets);
+        }
 
         if (editIndex >= 0 && editIndex < data.meals.length) {
             // EDIT mode — update existing meal
@@ -781,6 +827,49 @@
         // Manual Add / Edit
         $("btn-manual-cancel").addEventListener("click", () => showView("home"));
         $("btn-manual-save").addEventListener("click", saveManualMeal);
+        
+        if (els.manualPresets) {
+            els.manualPresets.addEventListener("change", () => {
+                const idx = els.manualPresets.value;
+                if (idx === "") {
+                    els.btnDeletePreset.style.display = "none";
+                    $('manual-name').value = '';
+                    $('manual-calories').value = '';
+                    $('manual-protein').value = '';
+                    $('manual-carbs').value = '';
+                    $('manual-fat').value = '';
+                } else {
+                    const p = getPresets()[parseInt(idx, 10)];
+                    if (p) {
+                        els.btnDeletePreset.style.display = "block";
+                        $('manual-name').value = p.name || '';
+                        $('manual-calories').value = p.calories || '';
+                        $('manual-protein').value = p.protein || '';
+                        $('manual-carbs').value = p.carbs || '';
+                        $('manual-fat').value = p.fat || '';
+                    }
+                }
+            });
+        }
+        
+        if (els.btnDeletePreset) {
+            els.btnDeletePreset.addEventListener("click", () => {
+                const idx = els.manualPresets.value;
+                if (idx !== "") {
+                    const presets = getPresets();
+                    if (confirm(`Delete preset "${presets[idx].name}"?`)) {
+                        presets.splice(idx, 1);
+                        savePresets(presets);
+                        renderPresetsDropdown();
+                        $('manual-name').value = '';
+                        $('manual-calories').value = '';
+                        $('manual-protein').value = '';
+                        $('manual-carbs').value = '';
+                        $('manual-fat').value = '';
+                    }
+                }
+            });
+        }
 
         // Camera
         $("btn-camera-back").addEventListener("click", () => {

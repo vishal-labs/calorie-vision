@@ -124,6 +124,21 @@
             <input type="hidden" id="manual-edit-index" value="-1">
 
             <div class="manual-form">
+                <div class="setting-group" id="preset-selector-group">
+                    <label for="manual-presets" class="setting-label">Saved Presets</label>
+                    <div class="preset-row">
+                        <select id="manual-presets" class="text-input select-input">
+                            <option value="">Custom Entry...</option>
+                        </select>
+                        <button id="btn-delete-preset" class="icon-btn danger-icon" style="display:none;" aria-label="Delete preset">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="3 6 5 6 21 6"></polyline>
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="setting-group">
                     <label for="manual-name" class="setting-label">Meal Name *</label>
                     <input type="text" id="manual-name" class="text-input" placeholder="e.g. Chicken Salad"
@@ -155,6 +170,11 @@
                     <label for="manual-desc" class="setting-label">Description (optional)</label>
                     <input type="text" id="manual-desc" class="text-input" placeholder="e.g. Homemade, light dressing"
                         autocomplete="off">
+                </div>
+
+                <div class="checkbox-group" id="save-preset-group">
+                    <input type="checkbox" id="manual-save-preset">
+                    <label for="manual-save-preset">Save this meal for future use</label>
                 </div>
             </div>
 
