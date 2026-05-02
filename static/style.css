@@ -568,15 +568,59 @@ body {
 }
 
 /* History Chart */
+.chart-wrapper {
+    display: flex;
+    margin-bottom: 20px;
+    height: 160px;
+    padding-top: 10px;
+}
+
+.y-axis {
+    width: 45px;
+    position: relative;
+    border-right: 1px solid var(--border-subtle);
+    margin-right: 8px;
+    height: 120px;
+}
+
+.y-tick {
+    position: absolute;
+    width: 100%;
+    right: 6px;
+    text-align: right;
+    transform: translateY(50%);
+}
+
+.y-tick span {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+}
+
 .history-chart {
+    flex: 1;
     display: flex;
     justify-content: space-between;
     align-items: flex-end;
     height: 120px;
-    padding: 20px 10px 10px;
-    margin-bottom: 20px;
     border-bottom: 1px solid var(--border-subtle);
     gap: 8px;
+    position: relative;
+}
+
+.budget-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    border-top: 1px dashed var(--warning);
+    opacity: 0.5;
+    z-index: 0;
+}
+
+.chart-value {
+    font-size: 0.6rem;
+    color: var(--text-muted);
+    margin-bottom: 4px;
 }
 
 .chart-col {
@@ -587,6 +631,7 @@ body {
     gap: 6px;
     height: 100%;
     justify-content: flex-end;
+    z-index: 1;
 }
 
 .chart-bar-bg {
