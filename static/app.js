@@ -14,7 +14,7 @@
     };
 
     const DEFAULT_BUDGET = 2000;
-    const HISTORY_DAYS = 3;
+    const HISTORY_DAYS = 7;
 
     // Per-user key helpers — all data is namespaced by username
     function userKey(base) {
@@ -163,6 +163,12 @@
         warningText: $("warning-text"),
         settingName: $("setting-name"),
         settingBudget: $("setting-budget"),
+        dailyProtein: $("daily-protein"),
+        dailyCarbs: $("daily-carbs"),
+        dailyFat: $("daily-fat"),
+        btnExportData: $("btn-export-data"),
+        btnImportData: $("btn-import-data"),
+        fileImport: $("file-import"),
     };
 
     // ──────────────────────────────────────────
@@ -251,6 +257,17 @@
         els.calorieStatus.textContent = `${consumed} / ${budget} kcal`;
         els.remainingLabel.textContent = `${remaining} kcal remaining`;
 
+        // Macro status
+        let sumPro = 0, sumCrb = 0, sumFat = 0;
+        (data.meals || []).forEach(m => {
+            sumPro += (m.protein || 0);
+            sumCrb += (m.carbs || 0);
+            sumFat += (m.fat || 0);
+        });
+        if (els.dailyProtein) els.dailyProtein.textContent = sumPro;
+        if (els.dailyCarbs) els.dailyCarbs.textContent = sumCrb;
+        if (els.dailyFat) els.dailyFat.textContent = sumFat;
+
         // Progress bar
         els.progressBar.style.width = pct + "%";
         els.progressBar.classList.remove("warning", "danger");
@@ -320,7 +337,31 @@
         }
         els.historySection.style.display = "";
 
-        els.historyList.innerHTML = history
+        const budget = getBudget();
+        
+        // Render Chart
+        // Map history to chronological order (it's stored newest first)
+        const chartData = [...history].reverse();
+        const chartHtml = chartData.map(day => {
+            const pct = Math.min(100, (day.consumed / budget) * 100);
+            const isOver = day.consumed > budget;
+            const dObj = new Date(day.date + "T00:00:00");
+            const dayLabel = dObj.toLocaleDateString(undefined, { weekday: "short" });
+            
+            return `
+                <div class="chart-col">
+                    <div class="chart-bar-bg">
+                        <div class="chart-bar-fill ${isOver ? 'over' : ''}" style="height: ${pct}%"></div>
+                    </div>
+                    <span class="chart-label">${dayLabel}</span>
+                </div>
+            `;
+        }).join("");
+
+        const chartContainer = `<div class="history-chart">${chartHtml}</div>`;
+
+        // Render List
+        const listHtml = history
             .map((day) => {
                 const mealsHtml = (day.meals || [])
                     .map((m) => `
@@ -341,6 +382,8 @@
                 `;
             })
             .join("");
+
+        els.historyList.innerHTML = chartContainer + listHtml;
     }
 
     function renderResults(result) {
@@ -664,6 +707,62 @@
     }
 
     // ──────────────────────────────────────────
+    // DATA EXPORT & IMPORT
+    // ──────────────────────────────────────────
+    function exportData() {
+        const data = {};
+        for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key.startsWith("calorieVision_")) {
+                data[key] = localStorage.getItem(key);
+            }
+        }
+        const json = JSON.stringify(data, null, 2);
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `calorie_vision_backup_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function importData(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            try {
+                const data = JSON.parse(e.target.result);
+                // Clear existing calorieVision data
+                const keysToRemove = [];
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    if (key.startsWith("calorieVision_")) keysToRemove.push(key);
+                }
+                keysToRemove.forEach(k => localStorage.removeItem(k));
+
+                // Load new data
+                for (const key in data) {
+                    if (key.startsWith("calorieVision_")) {
+                        localStorage.setItem(key, data[key]);
+                    }
+                }
+                alert("Data imported successfully!");
+                location.reload(); // Reload to pick up new state
+            } catch (err) {
+                alert("Invalid backup file.");
+                console.error(err);
+            }
+        };
+        reader.readAsText(file);
+        event.target.value = ''; // reset input
+    }
+
+    // ──────────────────────────────────────────
     // EVENT LISTENERS
     // ──────────────────────────────────────────
     function init() {
@@ -707,6 +806,9 @@
         $("btn-settings-back").addEventListener("click", saveSettings);
         $("btn-reset-today").addEventListener("click", resetToday);
         $("btn-switch-profile").addEventListener("click", switchProfile);
+        els.btnExportData.addEventListener("click", exportData);
+        els.btnImportData.addEventListener("click", () => els.fileImport.click());
+        els.fileImport.addEventListener("change", importData);
 
         // Check if there's an active session
         const savedUser = getActiveUser();

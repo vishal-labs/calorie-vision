@@ -55,6 +55,21 @@
                 <div id="progress-bar" class="progress-fill" style="width: 0%"></div>
             </div>
             <span id="remaining-label" class="remaining-label">2000 kcal remaining</span>
+            
+            <div class="macro-summary-cards">
+                <div class="macro-card protein-card">
+                    <span class="macro-label">Protein</span>
+                    <span class="macro-value"><span id="daily-protein">0</span>g</span>
+                </div>
+                <div class="macro-card carbs-card">
+                    <span class="macro-label">Carbs</span>
+                    <span class="macro-value"><span id="daily-carbs">0</span>g</span>
+                </div>
+                <div class="macro-card fat-card">
+                    <span class="macro-label">Fat</span>
+                    <span class="macro-value"><span id="daily-fat">0</span>g</span>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -240,6 +255,12 @@
 
             <div class="setting-group">
                 <button id="btn-switch-profile" class="btn-secondary" style="width:100%">Switch Profile</button>
+            </div>
+
+            <div class="setting-group data-actions">
+                <button id="btn-export-data" class="btn-secondary">Export Data</button>
+                <button id="btn-import-data" class="btn-secondary">Import Data</button>
+                <input type="file" id="file-import" accept=".json" style="display:none">
             </div>
 
             <button id="btn-settings-back" class="btn-primary settings-save">Save & Back</button>
