@@ -350,45 +350,6 @@
 
         const budget = getBudget();
         
-        // Render Chart
-        // Map history to chronological order (it's stored newest first)
-        const chartData = [...history].reverse();
-        
-        const maxConsumed = Math.max(budget, ...chartData.map(d => d.consumed));
-        const yMax = Math.ceil(maxConsumed * 1.2); // Add some padding to the top
-        const budgetPct = (budget / yMax) * 100;
-
-        const chartHtml = chartData.map(day => {
-            const pct = (day.consumed / yMax) * 100;
-            const isOver = day.consumed > budget;
-            const dObj = new Date(day.date + "T00:00:00");
-            const dayLabel = dObj.toLocaleDateString(undefined, { weekday: "short" });
-            
-            return `
-                <div class="chart-col">
-                    <div class="chart-value">${day.consumed}</div>
-                    <div class="chart-bar-bg">
-                        <div class="chart-bar-fill ${isOver ? 'over' : ''}" style="height: ${pct}%" title="${day.consumed} kcal"></div>
-                    </div>
-                    <span class="chart-label">${dayLabel}</span>
-                </div>
-            `;
-        }).join("");
-
-        const chartContainer = `
-            <div class="chart-wrapper">
-                <div class="y-axis">
-                    <div class="y-tick" style="bottom: 100%"><span>${yMax}</span></div>
-                    <div class="y-tick" style="bottom: ${budgetPct}%"><span>${budget}</span></div>
-                    <div class="y-tick" style="bottom: 0%"><span>0</span></div>
-                </div>
-                <div class="history-chart">
-                    <div class="budget-line" style="bottom: ${budgetPct}%"></div>
-                    ${chartHtml}
-                </div>
-            </div>
-        `;
-
         // Render List
         const listHtml = history
             .map((day) => {
@@ -412,7 +373,7 @@
             })
             .join("");
 
-        els.historyList.innerHTML = chartContainer + listHtml;
+        els.historyList.innerHTML = listHtml;
     }
 
     function renderResults(result) {
