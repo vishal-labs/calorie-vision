@@ -1,0 +1,25 @@
+name: Deploy to Self-Hosted Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Build and Deploy
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Build and Restart Docker Containers
+        run: |
+          # Rebuild the docker image and recreate the containers in detached mode.
+          # This command will automatically pick up the new code and restart the service.
+          cd /home/Bunny/VSSD/home/vishal/self-hosting/calorie-vision/calorie-vision
+          docker compose up --build -d
+          
+          # Optional: Clean up old dangling images to save space on the server
+          docker image prune -f
