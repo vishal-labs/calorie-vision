@@ -17,7 +17,7 @@ jobs:
       - name: Build and Restart Docker Containers
         run: |
           # 1. Copy the persistent .env file from your server into the runner's workspace
-          cp /home/Bunny/VSSD/home/vishal/self-hosting/calorie-vision/calorie-vision/.env .
+          cp /home/Bunny/VSSD/home/vishal/self-hosting/calorie-vision.env .
           
           # 2. Rebuild using the freshly checked-out code
           docker compose up --build -d
