@@ -301,6 +301,15 @@
                 removeMeal(parseInt(btn.dataset.index, 10));
             });
         });
+
+        // Attach edit handlers (click on the card itself)
+        els.mealList.querySelectorAll(".meal-card").forEach((card) => {
+            card.addEventListener("click", () => {
+                const idx = parseInt(card.id.replace('meal-card-', ''), 10);
+                openEditMeal(idx);
+            });
+            card.style.cursor = 'pointer';
+        });
     }
 
     function renderHistory() {
@@ -486,15 +495,70 @@
     }
 
     // ──────────────────────────────────────────
-    // MANUAL ADD
+    // IMAGE UPLOAD
+    // ──────────────────────────────────────────
+    function triggerUpload() {
+        $('file-upload').click();
+    }
+
+    function handleFileUpload(event) {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const img = new Image();
+            img.onload = function () {
+                const canvas = els.capturedCanvas;
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                capturedBase64 = canvas.toDataURL('image/jpeg', 0.85).split(',')[1];
+                els.foodDescription.value = '';
+                showView('review');
+            };
+            img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+        // Reset input so same file can be re-selected
+        event.target.value = '';
+    }
+
+    // ──────────────────────────────────────────
+    // MANUAL ADD / EDIT
     // ──────────────────────────────────────────
     function openManualAdd() {
+        $('manual-title').textContent = 'Add Meal Manually';
+        $('manual-save-text').textContent = 'Add Meal';
+        $('manual-edit-index').value = '-1';
         $('manual-name').value = '';
         $('manual-calories').value = '';
         $('manual-protein').value = '';
         $('manual-carbs').value = '';
         $('manual-fat').value = '';
         $('manual-desc').value = '';
+        showView('manual');
+    }
+
+    function openEditMeal(index) {
+        const data = getTodayData();
+        if (index < 0 || index >= data.meals.length) return;
+        const meal = data.meals[index];
+
+        $('manual-title').textContent = 'Edit Meal';
+        $('manual-save-text').textContent = 'Save Changes';
+        $('manual-edit-index').value = index.toString();
+
+        // Parse name — if it contains ' — ', split into name and description
+        const parts = meal.name.split(' — ');
+        $('manual-name').value = parts[0] || '';
+        $('manual-desc').value = parts.length > 1 ? parts.slice(1).join(' — ') : '';
+        $('manual-calories').value = meal.calories || '';
+        $('manual-protein').value = meal.protein || '';
+        $('manual-carbs').value = meal.carbs || '';
+        $('manual-fat').value = meal.fat || '';
+
         showView('manual');
     }
 
@@ -511,20 +575,33 @@
         const fat = parseInt($('manual-fat').value, 10) || 0;
         const desc = $('manual-desc').value.trim();
         const displayName = desc ? `${name} — ${desc}` : name;
+        const editIndex = parseInt($('manual-edit-index').value, 10);
 
         const data = getTodayData();
-        const now = new Date();
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-        data.consumed += calories;
-        data.meals.push({
-            name: displayName,
-            calories: calories,
-            protein: protein,
-            carbs: carbs,
-            fat: fat,
-            time: timeStr,
-        });
+        if (editIndex >= 0 && editIndex < data.meals.length) {
+            // EDIT mode — update existing meal
+            const oldCalories = data.meals[editIndex].calories;
+            data.consumed = Math.max(0, data.consumed - oldCalories + calories);
+            data.meals[editIndex].name = displayName;
+            data.meals[editIndex].calories = calories;
+            data.meals[editIndex].protein = protein;
+            data.meals[editIndex].carbs = carbs;
+            data.meals[editIndex].fat = fat;
+        } else {
+            // ADD mode — new meal
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            data.consumed += calories;
+            data.meals.push({
+                name: displayName,
+                calories: calories,
+                protein: protein,
+                carbs: carbs,
+                fat: fat,
+                time: timeStr,
+            });
+        }
 
         saveTodayData(data);
         updateHeader();
@@ -598,9 +675,11 @@
 
         // Home
         $("btn-scan").addEventListener("click", startCamera);
+        $("btn-upload").addEventListener("click", triggerUpload);
+        $("file-upload").addEventListener("change", handleFileUpload);
         $("btn-manual").addEventListener("click", openManualAdd);
 
-        // Manual Add
+        // Manual Add / Edit
         $("btn-manual-cancel").addEventListener("click", () => showView("home"));
         $("btn-manual-save").addEventListener("click", saveManualMeal);
 
