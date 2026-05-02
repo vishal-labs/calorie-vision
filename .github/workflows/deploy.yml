@@ -16,10 +16,11 @@ jobs:
 
       - name: Build and Restart Docker Containers
         run: |
-          # Rebuild the docker image and recreate the containers in detached mode.
-          # This command will automatically pick up the new code and restart the service.
-          cd /home/Bunny/VSSD/home/vishal/self-hosting/calorie-vision/calorie-vision
+          # 1. Copy the persistent .env file from your server into the runner's workspace
+          cp /home/Bunny/VSSD/home/vishal/self-hosting/calorie-vision/calorie-vision/.env .
+          
+          # 2. Rebuild using the freshly checked-out code
           docker compose up --build -d
           
-          # Optional: Clean up old dangling images to save space on the server
+          # 3. Clean up old dangling images
           docker image prune -f
