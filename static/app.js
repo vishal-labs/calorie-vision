@@ -293,16 +293,7 @@
             els.progressBar.classList.add("warning");
         }
 
-        // Warning banner
-        if (consumed > budget) {
-            els.warningBanner.className = "warning-banner over";
-            els.warningText.textContent = `⚠️ You're ${consumed - budget} kcal over budget!`;
-        } else if (remaining <= budget * 0.2 && remaining > 0) {
-            els.warningBanner.className = "warning-banner warn";
-            els.warningText.textContent = `⚡ Only ${remaining} kcal left for today — choose wisely!`;
-        } else {
-            els.warningBanner.className = "warning-banner hidden";
-        }
+        // Warning banner removed per user preference
     }
 
     function renderMealLog() {
