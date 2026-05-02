@@ -383,6 +383,16 @@
         showView("home");
     }
 
+    function removeMeal(index) {
+        const data = getTodayData();
+        if (index < 0 || index >= data.meals.length) return;
+        const removed = data.meals.splice(index, 1)[0];
+        data.consumed = Math.max(0, data.consumed - removed.calories);
+        saveTodayData(data);
+        updateHeader();
+        renderMealLog();
+    }
+
     // ──────────────────────────────────────────
     // SETTINGS
     // ──────────────────────────────────────────
