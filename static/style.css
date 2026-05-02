@@ -676,7 +676,7 @@ body {
 
 /* ─── CAMERA VIEW ─── */
 
-#view-camera {
+#view-camera, #view-barcode {
     position: fixed;
     inset: 0;
     z-index: 200;
@@ -687,10 +687,11 @@ body {
 .camera-container {
     flex: 1;
     position: relative;
+    background: #000;
     overflow: hidden;
 }
 
-#camera-preview {
+#camera-preview, #barcode-video {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -1258,3 +1259,222 @@ input[type="number"]::-webkit-outer-spin-button {
 input[type="number"] {
     -moz-appearance: textfield;
 }
+
+/* Barcode New Layout */
+.barcode-new-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-bottom: 24px;
+}
+
+.br-section {
+    background: #141724;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+
+.br-section-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-bottom: 12px;
+}
+
+.ns-section {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+.ns-label {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.ns-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+.ns-badges {
+    display: flex;
+    gap: 4px;
+}
+
+.ns-square {
+    width: 34px;
+    height: 34px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #fff;
+    opacity: 0.25;
+    transition: all 0.3s ease;
+}
+
+.ns-square.active {
+    opacity: 1;
+    transform: scale(1.25) translateY(-2px);
+    z-index: 2;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.4);
+}
+
+.ns-a { background-color: #038141; }
+.ns-b { background-color: #85BB2F; }
+.ns-c { background-color: #FECB02; color: #111; }
+.ns-d { background-color: #EE8100; }
+.ns-e { background-color: #E63E11; }
+
+.ns-status {
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-top: 6px;
+    text-transform: uppercase;
+    text-align: right;
+    width: 100%;
+}
+
+.portion-row {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+.portion-btn {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px;
+    color: var(--text-secondary);
+    padding: 8px 16px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.2s;
+}
+
+.portion-btn.active {
+    border-color: #4ade80;
+    color: #4ade80;
+    background: rgba(74, 222, 128, 0.1);
+}
+
+.br-name-box {
+    background: #1c2136;
+    padding: 16px;
+    border-radius: 12px;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #fff;
+}
+
+.br-macros-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+}
+
+.br-macro-card {
+    background: #141724;
+    border-radius: 12px;
+    padding: 16px 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+
+.br-macro-val {
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
+.br-macro-unit {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin: 4px 0;
+}
+
+.br-macro-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.br-detailed-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+}
+
+.br-detail-card {
+    background: #1c2136;
+    border-radius: 12px;
+    padding: 16px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.br-detail-val {
+    font-size: 1.3rem;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.br-detail-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+
+.scanner-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.4);
+}
+
+.scanner-box {
+    width: 250px;
+    height: 150px;
+    border: 2px solid var(--accent);
+    border-radius: var(--radius-md);
+    position: relative;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+}
+
+.scanner-line {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 250px;
+    height: 2px;
+    background: var(--danger);
+    box-shadow: 0 0 4px var(--danger);
+    animation: scan 2s linear infinite;
+}
+
+@keyframes scan {
+    0% { transform: translate(-50%, -75px); }
+    50% { transform: translate(-50%, 75px); }
+    100% { transform: translate(-50%, -75px); }
+}
+

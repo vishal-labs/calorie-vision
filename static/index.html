@@ -9,7 +9,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=7">
+    <link rel="stylesheet" href="/static/style.css?v=9">
+    <script src="https://unpkg.com/@zxing/library@latest"></script>
 </head>
 
 <body>
@@ -83,6 +84,13 @@
                     <circle cx="12" cy="13" r="4" />
                 </svg>
                 Scan Meal
+            </button>
+            <button id="btn-barcode" class="btn-primary btn-barcode">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" stroke-dasharray="2 4" />
+                </svg>
+                Barcode
             </button>
             <button id="btn-upload" class="btn-secondary btn-upload">
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -183,6 +191,30 @@
                 <button id="btn-manual-save" class="btn-primary btn-consume"><span id="manual-save-text">Add
                         Meal</span></button>
             </div>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: BARCODE SCANNER ───── -->
+    <div id="view-barcode" class="view">
+        <div class="camera-container">
+            <video id="barcode-video" autoplay playsinline></video>
+            <div class="scanner-overlay">
+                <div class="scanner-box"></div>
+                <div class="scanner-line"></div>
+            </div>
+        </div>
+        <div class="camera-controls">
+            <button id="btn-barcode-back" class="btn-secondary">Cancel</button>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: BARCODE RESULT ───── -->
+    <div id="view-barcode-result" class="view">
+        <div class="results-container">
+            <h2>Product Details</h2>
+            <div id="barcode-result-content"></div>
+            <button id="btn-barcode-save" class="btn-primary" style="width: 100%; margin-top: 24px;">Log This Item</button>
+            <button id="btn-barcode-discard" class="btn-secondary" style="width: 100%; margin-top: 12px;">Discard</button>
         </div>
     </div>
 
@@ -289,7 +321,7 @@
 
     <canvas id="hidden-canvas" style="display:none;"></canvas>
 
-    <script src="/static/app.js?v=6"></script>
+    <script src="/static/app.js?v=13"></script>
 </body>
 
 </html>

@@ -24,3 +24,13 @@ along with the image, i can provide a small description(in an input box below th
 5. Write tests to test the working of every button, dynamic variable. Use minimal dependencies as possible.
 6. Use the existing UV venv for python development.
 7. Prioritise the UI/UX giving constant feedback to the user. while also mantaining smooth operations and transitions between views. 
+
+### Barcode scanning section
+Here is what I want along with the current version of the app: A barcode scanner which can read the barcodes of the food items and give the approximate calorie count that are accurate to the actual product. The calorie and label details should be displayed along with the Item Name. 
+
+But here is the additional feature that you have to do, classify the product into A, B, C, D, E (where A is the healthiest and E is the least healthiest). The color code should be Green, Light Green, Yellow, Orange, Red respectively. 
+Along with the classification, also give a small description of why the product is classified as such.(I think some country follows this scoring system already) 
+
+1. Breakdown this feature into smaller tasks and build a solid plan and execute it
+2. Write tests to verify the progress and integrity of these new features
+3. Choose your own method to get the Barcode details, Ig there is some open food labels dataset(live one ig) but feel free to search for existing ones and implement whatever you think is the easiest and best.   

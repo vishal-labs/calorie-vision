@@ -153,6 +153,8 @@
         home: $("view-home"),
         manual: $("view-manual"),
         camera: $("view-camera"),
+        barcode: $("view-barcode"),
+        barcodeResult: $("view-barcode-result"),
         review: $("view-review"),
         loading: $("view-loading"),
         results: $("view-results"),
@@ -170,6 +172,8 @@
         historyList: $("history-list"),
         historySection: $("history-section"),
         cameraPreview: $("camera-preview"),
+        barcodeVideo: $("barcode-video"),
+        barcodeResultContent: $("barcode-result-content"),
         capturedCanvas: $("captured-canvas"),
         foodDescription: $("food-description"),
         resultsItems: $("results-items"),
@@ -779,7 +783,283 @@
             }
         };
         reader.readAsText(file);
+        reader.readAsText(file);
         event.target.value = ''; // reset input
+    }
+
+    // ──────────────────────────────────────────
+    // BARCODE SCANNER & OPEN FOOD FACTS
+    // ──────────────────────────────────────────
+    let codeReader = null;
+    let barcodeCurrentProduct = null;
+    let isProcessingBarcode = false;
+    let scanRetryCount = 0;
+    let failedBarcodes = new Set();
+
+    async function startBarcodeScanner() {
+        if (!window.ZXing) {
+            alert("Barcode scanner library failed to load. Please check your internet connection and refresh.");
+            return;
+        }
+
+        isProcessingBarcode = false;
+        scanRetryCount = 0;
+        failedBarcodes.clear();
+        showView("barcode");
+        
+        try {
+            if (!codeReader) {
+                codeReader = new ZXing.BrowserMultiFormatReader();
+            }
+
+            const devices = await codeReader.listVideoInputDevices();
+            if (devices.length === 0) {
+                alert("No camera found on this device.");
+                showView("home");
+                return;
+            }
+
+            let deviceId = devices[0].deviceId;
+            const backCamera = devices.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment'));
+            if (backCamera) {
+                deviceId = backCamera.deviceId;
+            }
+
+            // Ensure any previous stream is stopped
+            codeReader.reset();
+
+            codeReader.decodeFromVideoDevice(deviceId, 'barcode-video', (result, err) => {
+                const text = result ? result.getText() : null;
+                if (text && !isProcessingBarcode && !failedBarcodes.has(text)) {
+                    isProcessingBarcode = true;
+                    // Do not stop scanner yet, wait for API to confirm it's a valid product
+                    fetchProductByBarcode(text);
+                }
+                if (err && err.name !== 'NotFoundException') {
+                    console.error("Barcode scan error:", err);
+                }
+            });
+        } catch (e) {
+            console.error(e);
+            alert("Error accessing camera: " + e.message);
+            showView("home");
+        }
+    }
+
+    function stopBarcodeScanner() {
+        if (codeReader) {
+            codeReader.reset();
+        }
+    }
+
+    async function fetchProductByBarcode(barcode) {
+        // Fetch happens in the background while camera is still visible
+        try {
+            const res = await fetch(`https://world.openfoodfacts.org/api/v0/product/${barcode}.json`);
+            const data = await res.json();
+            
+            if (data.status === 1) {
+                stopBarcodeScanner(); // Valid product found, stop scanning
+                const p = data.product;
+                const n = p.nutriments || {};
+                
+                barcodeCurrentProduct = {
+                    name: p.product_name || "Unknown Product",
+                    calories: Math.round(n['energy-kcal_100g'] || n['energy-kcal'] || 0),
+                    protein: Math.round(n['proteins_100g'] || n['proteins'] || 0),
+                    carbs: Math.round(n['carbohydrates_100g'] || n['carbohydrates'] || 0),
+                    fat: Math.round(n['fat_100g'] || n['fat'] || 0),
+                    sugar: Math.round(n['sugars_100g'] || n['sugars'] || 0),
+                    sodium: Math.round((n['sodium_100g'] || n['sodium'] || 0) * 1000), // mg
+                    satFat: Math.round(n['saturated-fat_100g'] || n['saturated-fat'] || 0),
+                    weight_g: 100, // API returns per 100g generally
+                    grade: p.nutriscore_grade ? p.nutriscore_grade.toLowerCase() : null
+                };
+                
+                renderBarcodeResult(barcodeCurrentProduct);
+            } else {
+                // Invalid barcode, record it and retry
+                failedBarcodes.add(barcode);
+                scanRetryCount++;
+                if (scanRetryCount >= 4) {
+                    stopBarcodeScanner();
+                    alert("Product not found after several attempts. Please try again or use manual entry.");
+                    showView("home");
+                } else {
+                    isProcessingBarcode = false; // Unlock to allow reading a different barcode
+                }
+            }
+        } catch (e) {
+            console.error(e);
+            failedBarcodes.add(barcode);
+            scanRetryCount++;
+            if (scanRetryCount >= 4) {
+                stopBarcodeScanner();
+                alert("Error fetching product data. Please check your internet connection.");
+                showView("home");
+            } else {
+                isProcessingBarcode = false;
+            }
+        }
+    }
+
+
+    const nutriScoreDescriptions = {
+        'a': 'Excellent nutritional quality. High in healthy nutrients (fiber, protein, fruit/veg).',
+        'b': 'Good nutritional quality. Balanced profile with minimal unhealthy fats/sugars.',
+        'c': 'Average nutritional quality. Consume in moderation.',
+        'd': 'Poor nutritional quality. High in sugar, saturated fat, or sodium.',
+        'e': 'Very poor nutritional quality. Heavily processed or high in unhealthy components. Consume rarely.'
+    };
+
+    function renderBarcodeResult(product) {
+        // Expose function globally for the portion buttons
+        window.updatePortion = function(multiplier) {
+            document.querySelectorAll('.portion-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(`port-${multiplier}`).classList.add('active');
+            
+            const mult = parseFloat(multiplier);
+            document.getElementById('br-cal').innerText = Math.round(product.calories * mult);
+            document.getElementById('br-pro').innerText = Math.round(product.protein * mult);
+            document.getElementById('br-car').innerText = Math.round(product.carbs * mult);
+            document.getElementById('br-fat').innerText = Math.round(product.fat * mult);
+            
+            document.getElementById('br-sug').innerText = Math.round(product.sugar * mult) + 'g';
+            document.getElementById('br-sod').innerText = Math.round(product.sodium * mult) + 'mg';
+            document.getElementById('br-sat').innerText = Math.round(product.satFat * mult) + 'g';
+            
+            // Update global current product so saving uses correct amount
+            barcodeCurrentProduct.multiplier = mult;
+        };
+
+        // Initialize multiplier
+        product.multiplier = 1.0;
+
+        let scoreHtml = '';
+        if (product.grade) {
+            const grades = ['a', 'b', 'c', 'd', 'e'];
+            let badgeLabel = 'Unknown';
+            if (product.grade === 'a' || product.grade === 'b') badgeLabel = '<span style="color:#4ade80">Good</span>';
+            if (product.grade === 'c') badgeLabel = '<span style="color:#fbbf24">Average</span>';
+            if (product.grade === 'd' || product.grade === 'e') badgeLabel = '<span style="color:#f87171">Poor</span>';
+
+            const badgesHtml = grades.map(g => {
+                const isActive = g === product.grade;
+                const activeClass = isActive ? 'active' : '';
+                return `<div class="ns-square ns-${g} ${activeClass}">${g.toUpperCase()}</div>`;
+            }).join('');
+
+            scoreHtml = `
+                <div class="br-section ns-section">
+                    <div class="ns-label">Nutri-Score</div>
+                    <div class="ns-row">
+                        <div class="ns-badges">${badgesHtml}</div>
+                        <div class="ns-status">${badgeLabel}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        const portionsHtml = `
+            <div class="br-section">
+                <div class="br-section-title">Portion size</div>
+                <div class="portion-row">
+                    <button id="port-0.25" class="portion-btn" onclick="updatePortion(0.25)">¼</button>
+                    <button id="port-0.5" class="portion-btn" onclick="updatePortion(0.5)">½</button>
+                    <button id="port-0.75" class="portion-btn" onclick="updatePortion(0.75)">¾</button>
+                    <button id="port-1" class="portion-btn active" onclick="updatePortion(1)">1x</button>
+                    <button id="port-1.5" class="portion-btn" onclick="updatePortion(1.5)">1½</button>
+                    <button id="port-2" class="portion-btn" onclick="updatePortion(2)">2x</button>
+                </div>
+            </div>
+        `;
+
+        const nameHtml = `
+            <div class="br-section">
+                <div class="br-section-title">Food Name</div>
+                <div class="br-name-box">${escapeHtml(product.name)}</div>
+            </div>
+        `;
+
+        const macrosHtml = `
+            <div class="br-macros-grid">
+                <div class="br-macro-card">
+                    <div class="br-macro-val" style="color: #4ade80" id="br-cal">${product.calories}</div>
+                    <div class="br-macro-unit">kcal</div>
+                    <div class="br-macro-label">Calories</div>
+                </div>
+                <div class="br-macro-card">
+                    <div class="br-macro-val" style="color: #f87171" id="br-pro">${product.protein}</div>
+                    <div class="br-macro-unit">g</div>
+                    <div class="br-macro-label">Protein</div>
+                </div>
+                <div class="br-macro-card">
+                    <div class="br-macro-val" style="color: #fbbf24" id="br-car">${product.carbs}</div>
+                    <div class="br-macro-unit">g</div>
+                    <div class="br-macro-label">Carbs</div>
+                </div>
+                <div class="br-macro-card">
+                    <div class="br-macro-val" style="color: #4ade80" id="br-fat">${product.fat}</div>
+                    <div class="br-macro-unit">g</div>
+                    <div class="br-macro-label">Fat</div>
+                </div>
+            </div>
+        `;
+
+        const detailedHtml = `
+            <div class="br-section br-detailed">
+                <div class="br-section-title"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 6px; vertical-align: text-top;"><path d="M12 20V10M18 20V4M6 20v-4"/></svg>Detailed Nutrition</div>
+                <div class="br-detailed-grid">
+                    <div class="br-detail-card">
+                        <div class="br-detail-val" style="color: #fbbf24" id="br-sug">${product.sugar}g</div>
+                        <div class="br-detail-label">Sugar</div>
+                    </div>
+                    <div class="br-detail-card">
+                        <div class="br-detail-val" style="color: #f97316" id="br-sod">${product.sodium}mg</div>
+                        <div class="br-detail-label">Sodium</div>
+                    </div>
+                    <div class="br-detail-card">
+                        <div class="br-detail-val" style="color: #f43f5e" id="br-sat">${product.satFat}g</div>
+                        <div class="br-detail-label">Sat. Fat</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        els.barcodeResultContent.innerHTML = `
+            <div class="barcode-new-layout">
+                ${scoreHtml}
+                ${portionsHtml}
+                ${nameHtml}
+                ${macrosHtml}
+                ${detailedHtml}
+            </div>
+        `;
+        
+        showView("barcodeResult");
+    }
+
+    function saveBarcodeMeal() {
+        if (!barcodeCurrentProduct) return;
+        const data = getTodayData();
+        data.meals = data.meals || [];
+        
+        const mult = barcodeCurrentProduct.multiplier || 1.0;
+        const loggedProduct = {
+            name: barcodeCurrentProduct.name,
+            calories: Math.round(barcodeCurrentProduct.calories * mult),
+            protein: Math.round(barcodeCurrentProduct.protein * mult),
+            carbs: Math.round(barcodeCurrentProduct.carbs * mult),
+            fat: Math.round(barcodeCurrentProduct.fat * mult)
+        };
+        
+        data.meals.push(loggedProduct);
+        data.consumed += loggedProduct.calories;
+        saveTodayData(data);
+        updateHeader();
+        renderMealLog();
+        renderHistory();
+        showView("home");
     }
 
     // ──────────────────────────────────────────
@@ -797,6 +1077,30 @@
         $("btn-upload").addEventListener("click", triggerUpload);
         $("file-upload").addEventListener("change", handleFileUpload);
         $("btn-manual").addEventListener("click", openManualAdd);
+        
+        // Barcode Scanner
+        const btnBarcode = document.getElementById("btn-barcode");
+        if (btnBarcode) {
+            btnBarcode.addEventListener("click", startBarcodeScanner);
+        }
+        
+        const btnBarcodeBack = document.getElementById("btn-barcode-back");
+        if (btnBarcodeBack) {
+            btnBarcodeBack.addEventListener("click", () => {
+                stopBarcodeScanner();
+                showView("home");
+            });
+        }
+        
+        const btnBarcodeSave = document.getElementById("btn-barcode-save");
+        if (btnBarcodeSave) {
+            btnBarcodeSave.addEventListener("click", saveBarcodeMeal);
+        }
+        
+        const btnBarcodeDiscard = document.getElementById("btn-barcode-discard");
+        if (btnBarcodeDiscard) {
+            btnBarcodeDiscard.addEventListener("click", () => showView("home"));
+        }
 
         // Manual Add / Edit
         $("btn-manual-cancel").addEventListener("click", () => showView("home"));
