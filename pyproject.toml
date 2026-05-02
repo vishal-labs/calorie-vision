@@ -1,0 +1,16 @@
+[project]
+name = "calorie-vision"
+version = "0.1.0"
+description = "Personal calorie tracking app with AI-powered food image analysis"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.1.0",
+    "pytest>=8.3.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

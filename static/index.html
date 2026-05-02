@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="description" content="Calorie Vision — AI-powered food calorie tracker">
+    <title>Calorie Vision</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- ───── HEADER ───── -->
+    <header id="app-header">
+        <div class="header-top">
+            <h1 id="app-title">
+                <span class="logo-icon">⚡</span> Calorie Vision
+            </h1>
+            <button id="btn-settings" class="icon-btn" aria-label="Settings">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+            </button>
+        </div>
+        <div id="progress-section">
+            <div class="progress-info">
+                <span id="greeting" class="greeting">Hello!</span>
+                <span id="calorie-status" class="calorie-status">0 / 2000 kcal</span>
+            </div>
+            <div class="progress-track">
+                <div id="progress-bar" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <span id="remaining-label" class="remaining-label">2000 kcal remaining</span>
+        </div>
+    </header>
+
+    <!-- ───── VIEW: HOME ───── -->
+    <main id="view-home" class="view active">
+        <button id="btn-scan" class="btn-primary btn-scan">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                <circle cx="12" cy="13" r="4"/>
+            </svg>
+            Scan Meal
+        </button>
+
+        <section id="today-meals" class="meal-log">
+            <h2 class="section-title">Today's Meals</h2>
+            <div id="meal-list" class="meal-list">
+                <p class="empty-state">No meals logged yet. Tap "Scan Meal" to start!</p>
+            </div>
+        </section>
+
+        <section id="history-section" class="meal-log history-section">
+            <h2 class="section-title">Recent History</h2>
+            <div id="history-list" class="history-list"></div>
+        </section>
+    </main>
+
+    <!-- ───── VIEW: CAMERA ───── -->
+    <div id="view-camera" class="view">
+        <div class="camera-container">
+            <video id="camera-preview" autoplay playsinline></video>
+            <div class="camera-overlay">
+                <div class="viewfinder"></div>
+            </div>
+        </div>
+        <div class="camera-controls">
+            <button id="btn-camera-back" class="btn-secondary">Cancel</button>
+            <button id="btn-capture" class="btn-capture" aria-label="Capture">
+                <span class="capture-ring"></span>
+            </button>
+            <div class="spacer"></div>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: REVIEW ───── -->
+    <div id="view-review" class="view">
+        <div class="review-container">
+            <div class="captured-image-wrapper">
+                <canvas id="captured-canvas"></canvas>
+            </div>
+            <div class="review-form">
+                <label for="food-description" class="input-label">Describe your meal (optional)</label>
+                <input type="text" id="food-description" class="text-input" placeholder="e.g. Grilled chicken with rice and salad" autocomplete="off">
+                <div class="review-actions">
+                    <button id="btn-retake" class="btn-secondary">Retake</button>
+                    <button id="btn-analyze" class="btn-primary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+                        </svg>
+                        Analyze
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: LOADING ───── -->
+    <div id="view-loading" class="view">
+        <div class="loading-container">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">Analyzing your meal…</p>
+            <p class="loading-subtext">This may take a few seconds</p>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: RESULTS ───── -->
+    <div id="view-results" class="view">
+        <div class="results-container">
+            <h2 class="results-title">Nutritional Breakdown</h2>
+            <div id="results-items" class="results-items"></div>
+            <div id="results-total" class="results-total"></div>
+            <div id="results-suggestion" class="results-suggestion"></div>
+            <div class="results-actions">
+                <button id="btn-discard" class="btn-secondary">Discard</button>
+                <button id="btn-consume" class="btn-primary btn-consume">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
+                    </svg>
+                    Consume
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: SETTINGS ───── -->
+    <div id="view-settings" class="view">
+        <div class="settings-container">
+            <h2 class="settings-title">Settings</h2>
+
+            <div class="setting-group">
+                <label for="setting-name" class="setting-label">Your Name</label>
+                <input type="text" id="setting-name" class="text-input" placeholder="Enter your name">
+            </div>
+
+            <div class="setting-group">
+                <label for="setting-budget" class="setting-label">Daily Calorie Budget (kcal)</label>
+                <input type="number" id="setting-budget" class="text-input" value="2000" min="500" max="10000" step="50">
+            </div>
+
+            <div class="setting-group">
+                <button id="btn-reset-today" class="btn-danger">Reset Today's Data</button>
+            </div>
+
+            <button id="btn-settings-back" class="btn-primary settings-save">Save & Back</button>
+        </div>
+    </div>
+
+    <!-- ───── WARNING BANNER ───── -->
+    <div id="warning-banner" class="warning-banner hidden">
+        <span id="warning-text"></span>
+    </div>
+
+    <canvas id="hidden-canvas" style="display:none;"></canvas>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
