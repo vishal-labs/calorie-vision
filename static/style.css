@@ -554,17 +554,29 @@ body {
 .history-meal {
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
     font-size: 0.85rem;
-    padding: 4px 0;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.history-meal:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
 }
 
 .history-meal-name {
     color: var(--text-primary);
+    flex: 1;
+    padding-right: 20px;
+    line-height: 1.4;
 }
 
 .history-meal-cal {
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    text-align: right;
 }
 
 /* History Chart */
