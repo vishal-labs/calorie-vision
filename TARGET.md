@@ -34,3 +34,17 @@ Along with the classification, also give a small description of why the product 
 1. Breakdown this feature into smaller tasks and build a solid plan and execute it
 2. Write tests to verify the progress and integrity of these new features
 3. Choose your own method to get the Barcode details, Ig there is some open food labels dataset(live one ig) but feel free to search for existing ones and implement whatever you think is the easiest and best.   
+
+
+### Database architecture. 
+1. I want to move from localStorage to a database architecture. 
+2. Where each user will have their own tables, each holding their daily log and preset information.
+3. Also, there should be User signup/login feature. 
+4. Any other Database schema/tables/features that you feel might be useful, implement those too. 
+5. Use proper Database security and authentication, authorization. Make sure it is safe and secure from backend point of view. Like prevention of SQL injection, CSRF, etc..
+6. Use RESTful API endpoints for all these features.
+7. I want this entire database setup to be in the docker compose file as an other service, meaning once deployed, for the first time, it should setup the database automatically. and set a simple password(example: 'pass') as the default for all the user accounts, but once they try to login, prompt them to change the password. If there is any other better setup/migration setup feel free to implement it. 
+8. Write a solid plan and break down this feature into smaller tasks and execute it. Write proper tests to verify the progress and integrity of these new features.
+9. Split the entire section into smaller problems, while having a solid plan and tests at every step to check the integrity of the features that are new and existing. 
+
+Finally, Update the Frontend with the required changes that's suitable for mobile view. do a little bit of polishing for the existing UI while keeping the entire UX more user friendly. 

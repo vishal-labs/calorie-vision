@@ -1,18 +1,18 @@
 FROM python:3.14-slim
 
-# Install uv
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq-dev gcc && \
+    rm -rf /var/lib/apt/lists/*
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-# Copy dependency files first for layer caching
 COPY pyproject.toml uv.lock* ./
 
-# Install dependencies
 RUN uv sync --no-dev --no-install-project
 
-# Copy application code
-COPY main.py ./
+COPY main.py database.py models.py schemas.py auth.py ./
 COPY static/ ./static/
 
 EXPOSE 8000

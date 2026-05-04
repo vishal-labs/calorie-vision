@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=15">
     <script src="https://unpkg.com/@zxing/library@latest"></script>
 </head>
 
@@ -20,14 +20,21 @@
             <div class="login-header">
                 <span class="login-logo">⚡</span>
                 <h1 class="login-title">Calorie Vision</h1>
-                <p class="login-subtitle">Select your profile to continue</p>
+                <p id="login-subtitle" class="login-subtitle">Sign in or create an account</p>
             </div>
-            <div id="profile-list" class="profile-list"></div>
-            <div class="login-divider"><span>or create new</span></div>
+            <div id="login-error" class="login-error" style="display:none"></div>
             <div class="login-form">
-                <input type="text" id="new-profile-name" class="text-input" placeholder="Enter your name"
-                    autocomplete="off" maxlength="20">
-                <button id="btn-create-profile" class="btn-primary">Get Started</button>
+                <input type="text" id="login-username" class="text-input" placeholder="Username" autocomplete="username" maxlength="50">
+                <input type="password" id="login-password" class="text-input" placeholder="Password" autocomplete="current-password">
+                <button id="btn-login" class="btn-primary">Sign In</button>
+                <div class="login-divider"><span>or</span></div>
+                <button id="btn-register" class="btn-secondary">Create Account</button>
+            </div>
+            <div id="change-password-section" style="display:none">
+                <div class="login-divider"><span>change password required</span></div>
+                <input type="password" id="cp-old-password" class="text-input" placeholder="Current password">
+                <input type="password" id="cp-new-password" class="text-input" placeholder="New password (min 4 chars)" minlength="4">
+                <button id="btn-change-password" class="btn-primary">Update Password</button>
             </div>
         </div>
     </div>
@@ -35,17 +42,30 @@
     <!-- ───── HEADER ───── -->
     <header id="app-header">
         <div class="header-top">
+            <button id="btn-home" class="icon-btn" aria-label="Home">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                    <polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+            </button>
             <h1 id="app-title">
                 <span class="logo-icon">⚡</span> Calorie Vision
             </h1>
-            <button id="btn-settings" class="icon-btn" aria-label="Settings">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3" />
-                    <path
-                        d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-            </button>
+            <div class="header-actions">
+                <button id="btn-settings" class="icon-btn" aria-label="Settings">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>
+                <button id="btn-logout" class="icon-btn danger-icon" aria-label="Logout">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                        <polyline points="16 17 21 12 16 7"/>
+                        <line x1="21" y1="12" x2="9" y2="12"/>
+                    </svg>
+                </button>
+            </div>
         </div>
         <div id="progress-section">
             <div class="progress-info">
@@ -56,19 +76,22 @@
                 <div id="progress-bar" class="progress-fill" style="width: 0%"></div>
             </div>
             <span id="remaining-label" class="remaining-label">2000 kcal remaining</span>
-            
+
             <div class="macro-summary-cards">
                 <div class="macro-card protein-card">
                     <span class="macro-label">Protein</span>
                     <span class="macro-value"><span id="daily-protein">0</span>g</span>
+                    <span class="macro-goal" id="protein-goal">/ 150g</span>
                 </div>
                 <div class="macro-card carbs-card">
                     <span class="macro-label">Carbs</span>
                     <span class="macro-value"><span id="daily-carbs">0</span>g</span>
+                    <span class="macro-goal" id="carbs-goal">/ 200g</span>
                 </div>
                 <div class="macro-card fat-card">
                     <span class="macro-label">Fat</span>
                     <span class="macro-value"><span id="daily-fat">0</span>g</span>
+                    <span class="macro-goal" id="fat-goal">/ 67g</span>
                 </div>
             </div>
         </div>
@@ -78,39 +101,39 @@
     <main id="view-home" class="view">
         <div class="home-actions">
             <button id="btn-scan" class="btn-primary btn-scan">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                    <circle cx="12" cy="13" r="4" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
                 </svg>
                 Scan Meal
             </button>
             <button id="btn-barcode" class="btn-primary btn-barcode">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" stroke-dasharray="2 4" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 5v14M8 5v14M12 5v14M16 5v14M20 5v14" stroke-dasharray="2 4"/>
                 </svg>
                 Barcode
             </button>
             <button id="btn-upload" class="btn-secondary btn-upload">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <polyline points="21 15 16 10 5 21" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21 15 16 10 5 21"/>
                 </svg>
                 Upload
             </button>
             <button id="btn-manual" class="btn-secondary btn-manual">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="12" y1="5" x2="12" y2="19" />
-                    <line x1="5" y1="12" x2="19" y2="12" />
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
                 </svg>
                 Manual
             </button>
         </div>
         <input type="file" id="file-upload" accept="image/*" style="display:none">
+
+        <section id="profile-preview" class="profile-preview-section" style="display:none">
+            <div class="profile-card-compact" id="profile-card-content"></div>
+        </section>
 
         <section id="today-meals" class="meal-log">
             <h2 class="section-title">Today's Meals</h2>
@@ -130,7 +153,6 @@
         <div class="manual-container">
             <h2 id="manual-title" class="manual-title">Add Meal Manually</h2>
             <input type="hidden" id="manual-edit-index" value="-1">
-
             <div class="manual-form">
                 <div class="setting-group" id="preset-selector-group">
                     <label for="manual-presets" class="setting-label">Saved Presets</label>
@@ -146,19 +168,14 @@
                         </button>
                     </div>
                 </div>
-
                 <div class="setting-group">
                     <label for="manual-name" class="setting-label">Meal Name *</label>
-                    <input type="text" id="manual-name" class="text-input" placeholder="e.g. Chicken Salad"
-                        autocomplete="off">
+                    <input type="text" id="manual-name" class="text-input" placeholder="e.g. Chicken Salad" autocomplete="off">
                 </div>
-
                 <div class="setting-group">
                     <label for="manual-calories" class="setting-label">Calories (kcal) *</label>
-                    <input type="number" id="manual-calories" class="text-input" placeholder="e.g. 450" min="0"
-                        max="10000">
+                    <input type="number" id="manual-calories" class="text-input" placeholder="e.g. 450" min="0" max="10000">
                 </div>
-
                 <div class="manual-macros-row">
                     <div class="setting-group">
                         <label for="manual-protein" class="setting-label">Protein (g)</label>
@@ -173,23 +190,18 @@
                         <input type="number" id="manual-fat" class="text-input" placeholder="0" min="0">
                     </div>
                 </div>
-
                 <div class="setting-group">
                     <label for="manual-desc" class="setting-label">Description (optional)</label>
-                    <input type="text" id="manual-desc" class="text-input" placeholder="e.g. Homemade, light dressing"
-                        autocomplete="off">
+                    <input type="text" id="manual-desc" class="text-input" placeholder="e.g. Homemade, light dressing" autocomplete="off">
                 </div>
-
                 <div class="checkbox-group" id="save-preset-group">
                     <input type="checkbox" id="manual-save-preset">
                     <label for="manual-save-preset">Save this meal for future use</label>
                 </div>
             </div>
-
             <div class="review-actions">
                 <button id="btn-manual-cancel" class="btn-secondary">Cancel</button>
-                <button id="btn-manual-save" class="btn-primary btn-consume"><span id="manual-save-text">Add
-                        Meal</span></button>
+                <button id="btn-manual-save" class="btn-primary btn-consume"><span id="manual-save-text">Add Meal</span></button>
             </div>
         </div>
     </div>
@@ -213,8 +225,8 @@
         <div class="results-container">
             <h2>Product Details</h2>
             <div id="barcode-result-content"></div>
-            <button id="btn-barcode-save" class="btn-primary" style="width: 100%; margin-top: 24px;">Log This Item</button>
-            <button id="btn-barcode-discard" class="btn-secondary" style="width: 100%; margin-top: 12px;">Discard</button>
+            <button id="btn-barcode-save" class="btn-primary btn-barcode-save">Log This Item</button>
+            <button id="btn-barcode-discard" class="btn-secondary btn-barcode-discard">Discard</button>
         </div>
     </div>
 
@@ -240,14 +252,12 @@
             </div>
             <div class="review-form">
                 <label for="food-description" class="input-label">Describe your meal (optional)</label>
-                <input type="text" id="food-description" class="text-input"
-                    placeholder="Any description that would help the LLM analyse" autocomplete="off">
+                <input type="text" id="food-description" class="text-input" placeholder="Any description that would help the LLM analyse" autocomplete="off">
                 <div class="review-actions">
                     <button id="btn-retake" class="btn-secondary">Retake</button>
                     <button id="btn-analyze" class="btn-primary">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
                         </svg>
                         Analyze
                     </button>
@@ -275,9 +285,8 @@
             <div class="results-actions">
                 <button id="btn-discard" class="btn-secondary">Discard</button>
                 <button id="btn-consume" class="btn-primary btn-consume">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                        stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="20 6 9 17 4 12"/>
                     </svg>
                     Consume
                 </button>
@@ -288,25 +297,78 @@
     <!-- ───── VIEW: SETTINGS ───── -->
     <div id="view-settings" class="view">
         <div class="settings-container">
-            <h2 class="settings-title">Settings</h2>
+            <h2 class="settings-title">Settings &amp; Profile</h2>
 
             <div class="setting-group">
-                <label for="setting-name" class="setting-label">Your Name</label>
-                <input type="text" id="setting-name" class="text-input" placeholder="Enter your name">
+                <label for="setting-name" class="setting-label">Username</label>
+                <input type="text" id="setting-name" class="text-input" readonly>
             </div>
 
             <div class="setting-group">
                 <label for="setting-budget" class="setting-label">Daily Calorie Budget (kcal)</label>
-                <input type="number" id="setting-budget" class="text-input" value="2000" min="500" max="10000"
-                    step="50">
+                <input type="number" id="setting-budget" class="text-input" value="2000" min="500" max="10000" step="50">
             </div>
+
+            <div class="profile-section-divider">
+                <span>Body Profile</span>
+            </div>
+
+            <div class="profile-form-row">
+                <div class="setting-group">
+                    <label for="profile-height" class="setting-label">Height (cm)</label>
+                    <input type="number" id="profile-height" class="text-input" placeholder="e.g. 175" min="50" max="250" step="0.1">
+                </div>
+                <div class="setting-group">
+                    <label for="profile-weight" class="setting-label">Weight (kg)</label>
+                    <input type="number" id="profile-weight" class="text-input" placeholder="e.g. 70" min="20" max="300" step="0.1">
+                </div>
+            </div>
+
+            <div class="profile-form-row">
+                <div class="setting-group">
+                    <label for="profile-age" class="setting-label">Age</label>
+                    <input type="number" id="profile-age" class="text-input" placeholder="e.g. 25" min="10" max="120">
+                </div>
+                <div class="setting-group">
+                    <label for="profile-gender" class="setting-label">Gender</label>
+                    <select id="profile-gender" class="text-input select-input">
+                        <option value="">Not set</option>
+                        <option value="male">Male</option>
+                        <option value="female">Female</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="profile-section-divider">
+                <span>TDEE Calculator</span>
+            </div>
+
+            <div class="setting-group">
+                <label for="profile-activity" class="setting-label">Activity Level</label>
+                <select id="profile-activity" class="text-input select-input">
+                    <option value="">Not set</option>
+                    <option value="sedentary">Sedentary (little/no exercise)</option>
+                    <option value="light">Light (1-3 days/week)</option>
+                    <option value="moderate">Moderate (3-5 days/week)</option>
+                    <option value="active">Active (6-7 days/week)</option>
+                    <option value="very_active">Very Active (intense daily)</option>
+                </select>
+            </div>
+
+            <div class="setting-group">
+                <label for="profile-goal" class="setting-label">Goal</label>
+                <div class="goal-buttons">
+                    <button class="goal-btn goal-lose" data-goal="lose">Lose Weight<br><span>-20%</span></button>
+                    <button class="goal-btn goal-maintain active" data-goal="maintain">Maintain<br><span>±0%</span></button>
+                    <button class="goal-btn goal-gain" data-goal="gain">Gain Weight<br><span>+15%</span></button>
+                </div>
+                <input type="hidden" id="profile-goal" value="maintain">
+            </div>
+
+            <div id="tdee-result" class="tdee-result" style="display:none"></div>
 
             <div class="setting-group">
                 <button id="btn-reset-today" class="btn-danger">Reset Today's Data</button>
-            </div>
-
-            <div class="setting-group">
-                <button id="btn-switch-profile" class="btn-secondary" style="width:100%">Switch Profile</button>
             </div>
 
             <div class="setting-group data-actions">
@@ -315,13 +377,13 @@
                 <input type="file" id="file-import" accept=".json" style="display:none">
             </div>
 
-            <button id="btn-settings-back" class="btn-primary settings-save">Save & Back</button>
+            <button id="btn-settings-back" class="btn-primary settings-save">Save &amp; Back</button>
         </div>
     </div>
 
     <canvas id="hidden-canvas" style="display:none;"></canvas>
 
-    <script src="/static/app.js?v=13"></script>
+    <script src="/static/app.js?v=15"></script>
 </body>
 
 </html>

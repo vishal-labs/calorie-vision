@@ -12,3 +12,4 @@ venv
 
 # Environment secrets
 .env
+context.md

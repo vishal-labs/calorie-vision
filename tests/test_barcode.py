@@ -40,14 +40,14 @@ class TestBarcodeScannerIntegration:
         js_content = js_response.text
         
         # Assert logic features
-        assert 'fetchProductByBarcode' in js_content
+        assert 'handleBarcodeScan' in js_content
         assert 'startBarcodeScanner' in js_content
         assert 'nutriScoreDescriptions' in js_content
-        assert 'nutriscore-badge' in js_content
+        assert 'ns-square' in js_content
         
         # Verify Nutri-Score grades exist in the descriptions object
         for grade in ['a', 'b', 'c', 'd', 'e']:
-            assert f"'{grade}':" in js_content or f'"{grade}":' in js_content
+            assert f"'{grade}':" in js_content or f'"{grade}":' in js_content or f"{grade}:" in js_content
 
     def test_barcode_css_classes(self):
         """Verify that Nutri-Score CSS classes exist in style.css."""
@@ -61,7 +61,7 @@ class TestBarcodeScannerIntegration:
         assert '.scanner-box' in css_content
         
         # Verify Nutri-Score badge classes
-        assert '.nutriscore-badge' in css_content
-        assert '.nutriscore-desc' in css_content
+        assert '.ns-square' in css_content
+        assert '.ns-section' in css_content
         for grade in ['a', 'b', 'c', 'd', 'e']:
-            assert f'.nutriscore-badge.grade-{grade}' in css_content
+            assert f'.ns-{grade}' in css_content
