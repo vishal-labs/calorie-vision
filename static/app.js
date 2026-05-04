@@ -82,6 +82,7 @@
 
     const views = {
         login: $("view-login"),
+        forgotPassword: $("view-forgot-password"),
         home: $("view-home"),
         manual: $("view-manual"),
         camera: $("view-camera"),
@@ -101,6 +102,13 @@
         changePasswordSection: $("change-password-section"),
         cpOldPassword: $("cp-old-password"),
         cpNewPassword: $("cp-new-password"),
+        forgotUsername: $("forgot-username"),
+        forgotError: $("forgot-error"),
+        forgotSuccess: $("forgot-success"),
+        resetTokenSection: $("reset-token-section"),
+        resetTokenDisplay: $("reset-token-display"),
+        resetTokenInput: $("reset-token-input"),
+        newPasswordInput: $("new-password-input"),
         greeting: $("greeting"),
         calorieStatus: $("calorie-status"),
         progressBar: $("progress-bar"),
@@ -153,7 +161,7 @@
         if (v) v.classList.add("active");
 
         const header = $("app-header");
-        const hideHeader = ["login", "camera", "barcode", "barcodeResult", "loading", "review"].includes(name);
+        const hideHeader = ["login", "forgotPassword", "camera", "barcode", "barcodeResult", "loading", "review"].includes(name);
         header.style.display = hideHeader ? "none" : "";
     }
 
@@ -230,6 +238,88 @@
         clearAuth();
         stopCamera();
         stopBarcodeScanner();
+        showView("login");
+    }
+
+    // ══════════════════════════════════════════
+    // FORGOT PASSWORD
+    // ══════════════════════════════════════════
+
+    function showForgotPassword() {
+        // Clear previous state
+        els.forgotUsername.value = "";
+        els.forgotError.style.display = "none";
+        els.forgotSuccess.style.display = "none";
+        els.resetTokenSection.style.display = "none";
+        showView("forgotPassword");
+    }
+
+    async function handleRequestReset() {
+        els.forgotError.style.display = "none";
+        els.forgotSuccess.style.display = "none";
+        
+        const username = els.forgotUsername.value.trim();
+        if (!username) {
+            els.forgotError.textContent = "Please enter your username";
+            els.forgotError.style.display = "block";
+            return;
+        }
+
+        try {
+            const data = await apiPost("/api/auth/forgot-password", { username });
+            
+            if (data.reset_token) {
+                // Show the token to the user (in a real app, this would be emailed)
+                els.resetTokenDisplay.textContent = data.reset_token;
+                els.resetTokenSection.style.display = "block";
+                els.forgotSuccess.textContent = "Token generated! Enter it below to reset your password.";
+                els.forgotSuccess.style.display = "block";
+            } else {
+                // Security: always show success to prevent username enumeration
+                els.forgotSuccess.textContent = "If the username exists, a reset token has been sent.";
+                els.forgotSuccess.style.display = "block";
+            }
+        } catch (e) {
+            els.forgotError.textContent = e.message || "Failed to request reset";
+            els.forgotError.style.display = "block";
+        }
+    }
+
+    async function handleResetPassword() {
+        els.forgotError.style.display = "none";
+        
+        const username = els.forgotUsername.value.trim();
+        const resetToken = els.resetTokenInput.value.trim();
+        const newPassword = els.newPasswordInput.value;
+
+        if (!username || !resetToken || !newPassword) {
+            els.forgotError.textContent = "Please fill in all fields";
+            els.forgotError.style.display = "block";
+            return;
+        }
+
+        if (newPassword.length < 4) {
+            els.forgotError.textContent = "Password must be at least 4 characters";
+            els.forgotError.style.display = "block";
+            return;
+        }
+
+        try {
+            await apiPost("/api/auth/reset-password", {
+                username,
+                reset_token: resetToken,
+                new_password: newPassword
+            });
+            
+            alert("Password reset successful! Please login with your new password.");
+            showView("login");
+        } catch (e) {
+            els.forgotError.textContent = e.message || "Failed to reset password";
+            els.forgotError.style.display = "block";
+        }
+    }
+
+    function handleBackToLogin() {
         showView("login");
     }
 
@@ -1069,8 +1159,16 @@
         $("btn-login").addEventListener("click", handleLogin);
         $("btn-register").addEventListener("click", handleRegister);
         $("btn-change-password").addEventListener("click", handleChangePassword);
+        $("btn-forgot-password").addEventListener("click", showForgotPassword);
+        $("btn-request-reset").addEventListener("click", handleRequestReset);
+        $("btn-reset-password").addEventListener("click", handleResetPassword);
+        $("btn-back-to-login").addEventListener("click", handleBackToLogin);
+        
         els.loginPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") handleLogin(); });
         els.cpNewPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") handleChangePassword(); });
+        els.forgotUsername.addEventListener("keydown", (e) => { if (e.key === "Enter") handleRequestReset(); });
+        els.resetTokenInput.addEventListener("keydown", (e) => { if (e.key === "Enter") handleResetPassword(); });
+        els.newPasswordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") handleResetPassword(); });
 
         $("btn-home").addEventListener("click", () => loadAndShowHome());
         $("btn-logout").addEventListener("click", handleLogout);

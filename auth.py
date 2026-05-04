@@ -1,5 +1,6 @@
 import os
 import datetime
+import secrets
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -54,3 +55,13 @@ async def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user
+
+
+def generate_reset_token() -> str:
+    """Generate a secure random token for password reset."""
+    return secrets.token_urlsafe(32)
+
+
+def verify_reset_token(token: str) -> bool:
+    """Verify that a reset token has the correct format."""
+    return len(token) == 43

@@ -29,6 +29,7 @@
                 <button id="btn-login" class="btn-primary">Sign In</button>
                 <div class="login-divider"><span>or</span></div>
                 <button id="btn-register" class="btn-secondary">Create Account</button>
+                <button id="btn-forgot-password" class="btn-link">Forgot Password?</button>
             </div>
             <div id="change-password-section" style="display:none">
                 <div class="login-divider"><span>change password required</span></div>
@@ -36,6 +37,34 @@
                 <input type="password" id="cp-new-password" class="text-input" placeholder="New password (min 4 chars)" minlength="4">
                 <button id="btn-change-password" class="btn-primary">Update Password</button>
             </div>
+        </div>
+    </div>
+
+    <!-- ───── VIEW: FORGOT PASSWORD ───── -->
+    <div id="view-forgot-password" class="view">
+        <div class="login-container">
+            <div class="login-header">
+                <span class="login-logo">⚡</span>
+                <h1 class="login-title">Reset Password</h1>
+                <p id="forgot-subtitle" class="login-subtitle">Enter your username to request a reset token</p>
+            </div>
+            <div id="forgot-error" class="login-error" style="display:none"></div>
+            <div id="forgot-success" class="login-success" style="display:none"></div>
+            <div class="login-form">
+                <input type="text" id="forgot-username" class="text-input" placeholder="Username" autocomplete="username" maxlength="50">
+                <button id="btn-request-reset" class="btn-primary">Request Reset</button>
+            </div>
+            <div id="reset-token-section" style="display:none">
+                <div class="login-divider"><span>reset token</span></div>
+                <div class="token-display">
+                    <p>Your reset token:</p>
+                    <code id="reset-token-display"></code>
+                </div>
+                <input type="text" id="reset-token-input" class="text-input" placeholder="Enter reset token" autocomplete="off">
+                <input type="password" id="new-password-input" class="text-input" placeholder="New password (min 4 chars)" minlength="4">
+                <button id="btn-reset-password" class="btn-primary">Reset Password</button>
+            </div>
+            <button id="btn-back-to-login" class="btn-secondary">Back to Login</button>
         </div>
     </div>
 

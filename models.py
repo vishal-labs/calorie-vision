@@ -11,6 +11,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=True)
+    reset_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reset_expiry: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

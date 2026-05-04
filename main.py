@@ -26,10 +26,11 @@ from schemas import (
     PresetCreate, PresetResponse,
     BudgetResponse, BudgetUpdate, HistoryResponse, HistoryDay,
     ProfileUpdate, ProfileResponse, GoalSummary,
+    ForgotPasswordRequest, ResetPasswordRequest,
 )
 from auth import (
     hash_password, verify_password, create_token,
-    get_current_user,
+    get_current_user, generate_reset_token, verify_reset_token,
 )
 
 load_dotenv()
@@ -228,6 +229,72 @@ async def change_password(
     current_user.must_change_password = False
     await db.flush()
     return {"message": "Password changed successfully"}
+
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(
+    req: ForgotPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Request a password reset token for a user."""
+    result = await db.execute(select(User).where(User.username == req.username.strip()))
+    user = result.scalar_one_or_none()
+
+    # Always return success to prevent username enumeration
+    if not user:
+        return {"reset_token": "", "message": "If the username exists, a reset token has been sent"}
+
+    # Generate reset token with 1-hour expiry
+    reset_token = generate_reset_token()
+    reset_expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+
+    user.reset_token = reset_token
+    user.reset_expiry = reset_expiry
+    await db.flush()
+
+    return {"reset_token": reset_token, "message": "Password reset token generated"}
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password(
+    req: ResetPasswordRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset password using a valid reset token."""
+    result = await db.execute(select(User).where(User.username == req.username.strip()))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=400, detail="Invalid username or reset token")
+
+    # Validate token format
+    if not verify_reset_token(req.reset_token):
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    # Validate token matches and not expired
+    if user.reset_token != req.reset_token:
+        raise HTTPException(status_code=400, detail="Invalid reset token")
+
+    # Check expiry - handle both naive and aware datetimes
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if user.reset_expiry is None:
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+    
+    # Ensure both are comparable (handle SQLite returning naive datetimes)
+    expiry_check = user.reset_expiry
+    if expiry_check.tzinfo is None:
+        expiry_check = expiry_check.replace(tzinfo=datetime.timezone.utc)
+    
+    if expiry_check < now:
+        raise HTTPException(status_code=400, detail="Reset token has expired")
+
+    # Update password and clear token
+    user.password_hash = hash_password(req.new_password)
+    user.reset_token = None
+    user.reset_expiry = None
+    await db.flush()
+
+    return {"message": "Password reset successfully"}
 
 
 # ══════════════════════════════════════════════

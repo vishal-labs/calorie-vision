@@ -18,6 +18,16 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(..., min_length=4, max_length=128)
 
 
+class ForgotPasswordRequest(BaseModel):
+    username: str
+
+
+class ResetPasswordRequest(BaseModel):
+    username: str
+    reset_token: str
+    new_password: str = Field(..., min_length=4, max_length=128)
+
+
 class AuthResponse(BaseModel):
     token: str
     username: str
