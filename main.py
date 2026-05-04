@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
+import uuid
 
 from database import get_db, init_db, engine, Base
 from models import User, Meal, Preset, Budget, UserProfile
@@ -323,18 +324,77 @@ async def get_meals(
     )
     meals = result.scalars().all()
 
-    total_cal = sum(m.calories for m in meals)
-    total_protein = sum(m.protein for m in meals)
-    total_carbs = sum(m.carbs for m in meals)
-    total_fat = sum(m.fat for m in meals)
+    # Group meals by group_token
+    grouped_meals: dict[str, list[Meal]] = {}
+    ungrouped_meals: list[Meal] = []
+    for m in meals:
+        if m.group_token:
+            grouped_meals.setdefault(m.group_token, []).append(m)
+        else:
+            ungrouped_meals.append(m)
+
+    # Build response with grouping info
+    response_meals: list[MealResponse] = []
+    total_cal = 0.0
+    total_protein = 0.0
+    total_carbs = 0.0
+    total_fat = 0.0
+
+    # Add individual meals first
+    for m in ungrouped_meals:
+        response_meals.append(MealResponse(
+            id=m.id,
+            meal_date=m.meal_date,
+            name=m.name,
+            calories=m.calories,
+            protein=m.protein,
+            carbs=m.carbs,
+            fat=m.fat,
+            weight_g=m.weight_g,
+            group_token=m.group_token,
+            is_group=False,
+            items=None,
+        ))
+        total_cal += m.calories
+        total_protein += m.protein
+        total_carbs += m.carbs
+        total_fat += m.fat
+
+    # Add grouped meals
+    for token, group_meals in grouped_meals.items():
+        if group_meals:
+            # Use first meal's data as group summary
+            first = group_meals[0]
+            item_names = [m.name for m in group_meals]
+            response_meals.append(MealResponse(
+                id=first.id,
+                meal_date=first.meal_date,
+                name=f"Meal ({len(group_meals)} items)",
+                calories=sum(m.calories for m in group_meals),
+                protein=sum(m.protein for m in group_meals),
+                carbs=sum(m.carbs for m in group_meals),
+                fat=sum(m.fat for m in group_meals),
+                weight_g=sum(m.weight_g for m in group_meals),
+                group_token=token,
+                is_group=True,
+                items=item_names,
+            ))
+            total_cal += sum(m.calories for m in group_meals)
+            total_protein += sum(m.protein for m in group_meals)
+            total_carbs += sum(m.carbs for m in group_meals)
+            total_fat += sum(m.fat for m in group_meals)
 
     return MealListResponse(
-        meals=[MealResponse.model_validate(m) for m in meals],
+        meals=response_meals,
         total_calories=total_cal,
         total_protein=total_protein,
         total_carbs=total_carbs,
         total_fat=total_fat,
     )
+
+
+class MealCreateList(BaseModel):
+    meals: list[MealCreate]
 
 
 @app.post("/api/meals", response_model=MealResponse, status_code=201)
@@ -352,11 +412,74 @@ async def add_meal(
         carbs=meal.carbs,
         fat=meal.fat,
         weight_g=meal.weight_g,
+        group_token=meal.group_token,
     )
     db.add(record)
     await db.flush()
     await db.refresh(record)
-    return MealResponse.model_validate(record)
+    return MealResponse(
+        id=record.id,
+        meal_date=record.meal_date,
+        name=record.name,
+        calories=record.calories,
+        protein=record.protein,
+        carbs=record.carbs,
+        fat=record.fat,
+        weight_g=record.weight_g,
+        group_token=record.group_token,
+        is_group=False,
+        items=None,
+    )
+
+
+@app.post("/api/meals/batch", response_model=list[MealResponse], status_code=201)
+async def add_meals_batch(
+    data: MealCreateList,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Add multiple meals (e.g., from AI scan) with a shared group_token."""
+    if not data.meals:
+        return []
+
+    # Generate a single group_token for all meals in this batch
+    group_token = uuid.uuid4().hex[:16]
+
+    records = []
+    for meal in data.meals:
+        record = Meal(
+            user_id=current_user.id,
+            meal_date=meal.meal_date,
+            name=meal.name,
+            calories=meal.calories,
+            protein=meal.protein,
+            carbs=meal.carbs,
+            fat=meal.fat,
+            weight_g=meal.weight_g,
+            group_token=group_token,
+        )
+        db.add(record)
+        records.append(record)
+
+    await db.flush()
+
+    # Return all created meals
+    return [
+        MealResponse(
+            id=r.id,
+            meal_date=r.meal_date,
+            name=r.name,
+            calories=r.calories,
+            protein=r.protein,
+            carbs=r.carbs,
+            fat=r.fat,
+            weight_g=r.weight_g,
+            group_token=r.group_token,
+            is_group=True,
+            items=None,  # Items will be populated in GET
+        )
+        for r in records
+    ]
 
 
 @app.delete("/api/meals/{meal_id}")
@@ -371,7 +494,17 @@ async def delete_meal(
     meal = result.scalar_one_or_none()
     if not meal:
         raise HTTPException(status_code=404, detail="Meal not found")
-    await db.delete(meal)
+
+    # If meal has a group_token, delete all meals with same token
+    if meal.group_token:
+        await db.execute(
+            delete(Meal).where(
+                Meal.group_token == meal.group_token,
+                Meal.user_id == current_user.id,
+            )
+        )
+    else:
+        await db.delete(meal)
     return {"message": "Meal deleted"}
 
 

@@ -493,8 +493,28 @@
             return;
         }
         list.innerHTML = data.meals
-            .map(
-                (m) => `
+            .map((m) => {
+                if (m.is_group && m.items && m.items.length > 0) {
+                    // Render as expandable grouped card
+                    const itemsHtml = m.items
+                        .map((name) => `<div class="meal-group-item">${escapeHtml(name)}</div>`)
+                        .join("");
+                    return `
+                <div class="meal-card meal-card-group" data-meal-id="${m.id}" data-group-token="${m.group_token || ""}">
+                    <div class="meal-card-info">
+                        <span class="meal-card-name">${escapeHtml(m.name)}</span>
+                        <span class="meal-card-time">P:${Math.round(m.protein)}g C:${Math.round(m.carbs)}g F:${Math.round(m.fat)}g</span>
+                    </div>
+                    <div class="meal-card-right">
+                        <span class="meal-card-calories">${Math.round(m.calories)} kcal</span>
+                        <button class="btn-expand-group" aria-label="Expand">▼</button>
+                        <button class="btn-remove-meal" data-id="${m.id}" aria-label="Remove meal">&times;</button>
+                    </div>
+                    <div class="meal-group-items hidden">${itemsHtml}</div>
+                </div>`;
+                }
+                // Regular single meal card
+                return `
             <div class="meal-card" data-meal-id="${m.id}">
                 <div class="meal-card-info">
                     <span class="meal-card-name">${escapeHtml(m.name)}</span>
@@ -504,8 +524,8 @@
                     <span class="meal-card-calories">${Math.round(m.calories)} kcal</span>
                     <button class="btn-remove-meal" data-id="${m.id}" aria-label="Remove meal">&times;</button>
                 </div>
-            </div>`
-            )
+            </div>`;
+            })
             .join("");
 
         list.querySelectorAll(".btn-remove-meal").forEach((btn) => {
@@ -522,6 +542,19 @@
                     return;
                 }
                 await Promise.all([renderMealLog(), renderHistory(), updateHeader(), renderProfilePreview()]);
+            });
+        });
+
+        // Toggle expand/collapse for group meals
+        list.querySelectorAll(".btn-expand-group").forEach((btn) => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const card = btn.closest(".meal-card-group");
+                const itemsDiv = card.querySelector(".meal-group-items");
+                const isHidden = itemsDiv.classList.contains("hidden");
+                itemsDiv.classList.toggle("hidden", !isHidden);
+                btn.textContent = isHidden ? "▲" : "▼";
             });
         });
 
@@ -683,14 +716,25 @@
     async function consumeMeal() {
         if (!lastAnalysisResult) return;
         const today = todayStr();
-        for (const item of lastAnalysisResult.items) {
-            try {
-                await apiPost("/api/meals", {
-                    name: item.name, calories: item.calories, protein: item.protein,
-                    carbs: item.carbs, fat: item.fat, weight_g: item.weight_g, meal_date: today,
-                });
-            } catch (e) { console.error("Failed to log meal:", e); }
+
+        // Get existing meals array
+        const mealsToSave = lastAnalysisResult.items.map((item) => ({
+            name: item.name,
+            calories: item.calories,
+            protein: item.protein,
+            carbs: item.carbs,
+            fat: item.fat,
+            weight_g: item.weight_g,
+            meal_date: today,
+        }));
+
+        try {
+            // Send all meals as a batch (saves them with same group_token)
+            await apiPost("/api/meals/batch", { meals: mealsToSave });
+        } catch (e) {
+            console.error("Failed to log meals:", e);
         }
+
         lastAnalysisResult = null;
         await Promise.all([renderMealLog(), renderHistory(), updateHeader(), renderProfilePreview()]);
         showView("home");

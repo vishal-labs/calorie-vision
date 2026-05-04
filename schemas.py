@@ -42,6 +42,7 @@ class MealCreate(BaseModel):
     fat: float = 0
     weight_g: float = 0
     meal_date: date = Field(default_factory=date.today)
+    group_token: str | None = None
 
 
 class MealResponse(BaseModel):
@@ -55,6 +56,9 @@ class MealResponse(BaseModel):
     carbs: float
     fat: float
     weight_g: float
+    group_token: str | None = None
+    is_group: bool = False
+    items: list[str] | None = None
 
 
 class MealListResponse(BaseModel):

@@ -35,6 +35,7 @@ class Meal(Base):
     carbs: Mapped[float] = mapped_column(Float, default=0)
     fat: Mapped[float] = mapped_column(Float, default=0)
     weight_g: Mapped[float] = mapped_column(Float, default=0)
+    group_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
