@@ -829,11 +829,9 @@
 
     async function exportData() {
         try {
-            const [budget, todayMeals, history, presets] = await Promise.all([
-                loadBudget(), getTodayMeals(), apiGet("/api/history"), loadPresets(),
-            ]);
+            const data = await apiGet("/api/export");
             const blob = new Blob(
-                [JSON.stringify({ budget, today: todayMeals, history, presets }, null, 2)],
+                [JSON.stringify(data, null, 2)],
                 { type: "application/json" }
             );
             const url = URL.createObjectURL(blob);
@@ -854,24 +852,7 @@
         reader.onload = async () => {
             try {
                 const data = JSON.parse(reader.result);
-                if (data.budget) await apiPut("/api/budget", { daily_calories: data.budget });
-                if (data.today && data.today.meals) {
-                    const today = todayStr();
-                    for (const m of data.today.meals) {
-                        try { await apiPost("/api/meals", {
-                            name: m.name, calories: m.calories, protein: m.protein || 0,
-                            carbs: m.carbs || 0, fat: m.fat || 0, weight_g: m.weight_g || 0, meal_date: today,
-                        }); } catch (e) { /* skip */ }
-                    }
-                }
-                if (data.presets && Array.isArray(data.presets)) {
-                    for (const p of data.presets) {
-                        try { await apiPost("/api/presets", {
-                            name: p.name, calories: p.calories, protein: p.protein || 0,
-                            carbs: p.carbs || 0, fat: p.fat || 0, description: p.description || "",
-                        }); } catch (e) { /* skip */ }
-                    }
-                }
+                await apiPut("/api/import", data);
                 await Promise.all([updateHeader(), renderMealLog(), renderHistory(), renderProfilePreview()]);
                 alert("Data imported successfully.");
             } catch (err) { alert("Invalid backup file."); console.error(err); }

@@ -538,6 +538,208 @@ async def get_history(
 
 
 # ══════════════════════════════════════════════
+# EXPORT/IMPORT ENDPOINTS
+# ══════════════════════════════════════════════
+
+
+class ImportData(BaseModel):
+    meals: Optional[list[dict]] = None
+    presets: Optional[list[dict]] = None
+    budget: Optional[dict] = None
+    profile: Optional[dict] = None
+
+
+@app.get("/api/export")
+async def export_data(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export all user data including meals, presets, budget, and profile."""
+    # Get meals (all time)
+    meals_result = await db.execute(
+        select(Meal).where(Meal.user_id == current_user.id).order_by(Meal.meal_date.desc(), Meal.created_at)
+    )
+    meals = meals_result.scalars().all()
+    meals_data = [
+        {
+            "name": m.name,
+            "calories": m.calories,
+            "protein": m.protein,
+            "carbs": m.carbs,
+            "fat": m.fat,
+            "weight_g": m.weight_g,
+            "meal_date": m.meal_date.isoformat(),
+        }
+        for m in meals
+    ]
+
+    # Get presets
+    presets_result = await db.execute(
+        select(Preset).where(Preset.user_id == current_user.id).order_by(Preset.name)
+    )
+    presets = presets_result.scalars().all()
+    presets_data = [
+        {
+            "name": p.name,
+            "calories": p.calories,
+            "protein": p.protein,
+            "carbs": p.carbs,
+            "fat": p.fat,
+            "description": p.description,
+        }
+        for p in presets
+    ]
+
+    # Get budget
+    budget_result = await db.execute(
+        select(Budget).where(Budget.user_id == current_user.id)
+    )
+    budget = budget_result.scalar_one_or_none()
+    budget_data = {"daily_calories": budget.daily_calories if budget else 2000}
+
+    # Get profile
+    profile_result = await db.execute(
+        select(UserProfile).where(UserProfile.user_id == current_user.id)
+    )
+    profile = profile_result.scalar_one_or_none()
+    profile_data = {}
+    if profile:
+        profile_data = {
+            "height_cm": profile.height_cm,
+            "weight_kg": profile.weight_kg,
+            "age": profile.age,
+            "gender": profile.gender,
+            "activity_level": profile.activity_level,
+            "goal": profile.goal,
+            "tdee": profile.tdee,
+            "bmi": profile.bmi,
+        }
+
+    return {
+        "meals": meals_data,
+        "presets": presets_data,
+        "budget": budget_data,
+        "profile": profile_data,
+    }
+
+
+@app.put("/api/import")
+async def import_data(
+    data: ImportData,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Import user data including meals, presets, budget, and profile."""
+    # Import budget
+    if data.budget and "daily_calories" in data.budget:
+        budget_result = await db.execute(
+            select(Budget).where(Budget.user_id == current_user.id)
+        )
+        budget = budget_result.scalar_one_or_none()
+        if not budget:
+            budget = Budget(user_id=current_user.id, daily_calories=data.budget["daily_calories"])
+            db.add(budget)
+        else:
+            budget.daily_calories = data.budget["daily_calories"]
+        await db.flush()
+
+    # Import profile
+    if data.profile:
+        profile_result = await db.execute(
+            select(UserProfile).where(UserProfile.user_id == current_user.id)
+        )
+        profile = profile_result.scalar_one_or_none()
+
+        if not profile:
+            profile = UserProfile(user_id=current_user.id)
+            db.add(profile)
+
+        # Update provided profile fields
+        if "height_cm" in data.profile and data.profile["height_cm"] is not None:
+            profile.height_cm = data.profile["height_cm"]
+        if "weight_kg" in data.profile and data.profile["weight_kg"] is not None:
+            profile.weight_kg = data.profile["weight_kg"]
+        if "age" in data.profile and data.profile["age"] is not None:
+            profile.age = data.profile["age"]
+        if "gender" in data.profile and data.profile["gender"] is not None:
+            profile.gender = data.profile["gender"]
+        if "activity_level" in data.profile and data.profile["activity_level"] is not None:
+            profile.activity_level = data.profile["activity_level"]
+        if "goal" in data.profile and data.profile["goal"] is not None:
+            profile.goal = data.profile["goal"]
+
+        # Recalculate BMI and TDEE
+        if profile.height_cm is not None and profile.weight_kg is not None:
+            height_m = profile.height_cm / 100.0
+            profile.bmi = round(profile.weight_kg / (height_m ** 2), 1)
+
+        if (
+            profile.age is not None
+            and profile.gender is not None
+            and profile.weight_kg is not None
+            and profile.height_cm is not None
+            and profile.activity_level is not None
+        ):
+            if profile.gender == "male":
+                bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) + 5
+            else:
+                bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) - 161
+
+            activity_multipliers = {
+                "sedentary": 1.2,
+                "light": 1.375,
+                "moderate": 1.55,
+                "active": 1.725,
+                "very_active": 1.9,
+            }
+            multiplier = activity_multipliers.get(profile.activity_level, 1.55)
+            tdee = bmr * multiplier
+
+            goal_modifiers = {
+                "lose": 0.8,
+                "maintain": 1.0,
+                "gain": 1.15,
+            }
+            goal_modifier = goal_modifiers.get(profile.goal, 1.0) if profile.goal else 1.0
+            profile.tdee = tdee * goal_modifier
+
+        await db.flush()
+
+    # Import meals
+    if data.meals:
+        for meal_data in data.meals:
+            meal = Meal(
+                user_id=current_user.id,
+                meal_date=datetime.date.fromisoformat(meal_data.get("meal_date", datetime.date.today().isoformat())),
+                name=meal_data.get("name", "Imported Meal"),
+                calories=meal_data.get("calories", 0),
+                protein=meal_data.get("protein", 0),
+                carbs=meal_data.get("carbs", 0),
+                fat=meal_data.get("fat", 0),
+                weight_g=meal_data.get("weight_g", 0),
+            )
+            db.add(meal)
+        await db.flush()
+
+    # Import presets
+    if data.presets:
+        for preset_data in data.presets:
+            preset = Preset(
+                user_id=current_user.id,
+                name=preset_data.get("name", "Imported Preset"),
+                calories=preset_data.get("calories", 0),
+                protein=preset_data.get("protein", 0),
+                carbs=preset_data.get("carbs", 0),
+                fat=preset_data.get("fat", 0),
+                description=preset_data.get("description", ""),
+            )
+            db.add(preset)
+        await db.flush()
+
+    return {"message": "Data imported successfully"}
+
+
+# ══════════════════════════════════════════════
 # AI ANALYSIS ENDPOINT (existing)
 # ══════════════════════════════════════════════
 
