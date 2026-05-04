@@ -35,6 +35,68 @@ from auth import (
 load_dotenv()
 
 LLM_MODEL = "google/gemma-4-31b-it:free"
+
+
+# ══════════════════════════════════════════════
+# Helper Functions
+# ══════════════════════════════════════════════
+
+
+def calculate_bmi_tdee(
+    height_cm: Optional[float],
+    weight_kg: Optional[float],
+    age: Optional[int],
+    gender: Optional[str],
+    activity_level: Optional[str],
+    goal: Optional[str],
+) -> tuple[Optional[float], Optional[float]]:
+    """
+    Calculate BMI and TDEE based on profile fields.
+    Returns (bmi, tdee) tuple.
+    """
+    bmi = None
+    tdee = None
+
+    # Calculate BMI if height and weight are both available
+    if height_cm is not None and weight_kg is not None and height_cm > 0:
+        height_m = height_cm / 100.0
+        bmi = round(weight_kg / (height_m ** 2), 1)
+
+    # Calculate TDEE if all required fields are set
+    if (
+        age is not None
+        and gender is not None
+        and weight_kg is not None
+        and height_cm is not None
+        and activity_level is not None
+    ):
+        # BMR: Mifflin-St Jeor equation
+        if gender == "male":
+            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
+        else:  # female
+            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
+
+        # Activity multiplier
+        activity_multipliers = {
+            "sedentary": 1.2,
+            "light": 1.375,
+            "moderate": 1.55,
+            "active": 1.725,
+            "very_active": 1.9,
+        }
+        multiplier = activity_multipliers.get(activity_level, 1.55)
+        tdee = bmr * multiplier
+
+        # Goal modifier
+        goal_modifiers = {
+            "lose": 0.8,
+            "maintain": 1.0,
+            "gain": 1.15,
+        }
+        goal_modifier = goal_modifiers.get(goal, 1.0) if goal else 1.0
+        tdee = tdee * goal_modifier
+
+    return bmi, tdee
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1
 
@@ -383,44 +445,15 @@ async def update_profile(
     if data.goal is not None:
         profile.goal = data.goal
 
-    # Calculate BMI if height and weight are both available
-    if profile.height_cm is not None and profile.weight_kg is not None:
-        height_m = profile.height_cm / 100.0
-        profile.bmi = round(profile.weight_kg / (height_m ** 2), 1)
-
-    # Calculate TDEE if all required fields are set
-    if (
-        profile.age is not None
-        and profile.gender is not None
-        and profile.weight_kg is not None
-        and profile.height_cm is not None
-        and profile.activity_level is not None
-    ):
-        # BMR: Mifflin-St Jeor equation
-        if profile.gender == "male":
-            bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) + 5
-        else:  # female
-            bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) - 161
-
-        # Activity multiplier
-        activity_multipliers = {
-            "sedentary": 1.2,
-            "light": 1.375,
-            "moderate": 1.55,
-            "active": 1.725,
-            "very_active": 1.9,
-        }
-        multiplier = activity_multipliers.get(profile.activity_level, 1.55)
-        tdee = bmr * multiplier
-
-        # Goal modifier
-        goal_modifiers = {
-            "lose": 0.8,
-            "maintain": 1.0,
-            "gain": 1.15,
-        }
-        goal_modifier = goal_modifiers.get(profile.goal, 1.0) if profile.goal else 1.0
-        profile.tdee = tdee * goal_modifier
+    # Calculate BMI and TDEE using helper function
+    profile.bmi, profile.tdee = calculate_bmi_tdee(
+        height_cm=profile.height_cm,
+        weight_kg=profile.weight_kg,
+        age=profile.age,
+        gender=profile.gender,
+        activity_level=profile.activity_level,
+        goal=profile.goal,
+    )
 
     await db.flush()
     await db.refresh(profile)
@@ -654,13 +687,22 @@ async def import_data(
             profile = UserProfile(user_id=current_user.id)
             db.add(profile)
 
-        # Update provided profile fields
+        # Update provided profile fields with validation
         if "height_cm" in data.profile and data.profile["height_cm"] is not None:
-            profile.height_cm = data.profile["height_cm"]
+            height_val = data.profile["height_cm"]
+            if not isinstance(height_val, (int, float)) or height_val < 50 or height_val > 300:
+                raise HTTPException(status_code=400, detail="height_cm must be between 50 and 300")
+            profile.height_cm = height_val
         if "weight_kg" in data.profile and data.profile["weight_kg"] is not None:
-            profile.weight_kg = data.profile["weight_kg"]
+            weight_val = data.profile["weight_kg"]
+            if not isinstance(weight_val, (int, float)) or weight_val < 10 or weight_val > 500:
+                raise HTTPException(status_code=400, detail="weight_kg must be between 10 and 500")
+            profile.weight_kg = weight_val
         if "age" in data.profile and data.profile["age"] is not None:
-            profile.age = data.profile["age"]
+            age_val = data.profile["age"]
+            if not isinstance(age_val, int) or age_val < 1 or age_val > 150:
+                raise HTTPException(status_code=400, detail="age must be between 1 and 150")
+            profile.age = age_val
         if "gender" in data.profile and data.profile["gender"] is not None:
             profile.gender = data.profile["gender"]
         if "activity_level" in data.profile and data.profile["activity_level"] is not None:
@@ -668,55 +710,55 @@ async def import_data(
         if "goal" in data.profile and data.profile["goal"] is not None:
             profile.goal = data.profile["goal"]
 
-        # Recalculate BMI and TDEE
-        if profile.height_cm is not None and profile.weight_kg is not None:
-            height_m = profile.height_cm / 100.0
-            profile.bmi = round(profile.weight_kg / (height_m ** 2), 1)
-
-        if (
-            profile.age is not None
-            and profile.gender is not None
-            and profile.weight_kg is not None
-            and profile.height_cm is not None
-            and profile.activity_level is not None
-        ):
-            if profile.gender == "male":
-                bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) + 5
-            else:
-                bmr = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) - 161
-
-            activity_multipliers = {
-                "sedentary": 1.2,
-                "light": 1.375,
-                "moderate": 1.55,
-                "active": 1.725,
-                "very_active": 1.9,
-            }
-            multiplier = activity_multipliers.get(profile.activity_level, 1.55)
-            tdee = bmr * multiplier
-
-            goal_modifiers = {
-                "lose": 0.8,
-                "maintain": 1.0,
-                "gain": 1.15,
-            }
-            goal_modifier = goal_modifiers.get(profile.goal, 1.0) if profile.goal else 1.0
-            profile.tdee = tdee * goal_modifier
+        # Recalculate BMI and TDEE using helper function
+        profile.bmi, profile.tdee = calculate_bmi_tdee(
+            height_cm=profile.height_cm,
+            weight_kg=profile.weight_kg,
+            age=profile.age,
+            gender=profile.gender,
+            activity_level=profile.activity_level,
+            goal=profile.goal,
+        )
 
         await db.flush()
 
     # Import meals
     if data.meals:
         for meal_data in data.meals:
+            # Validate date format
+            date_str = meal_data.get("meal_date", datetime.date.today().isoformat())
+            try:
+                meal_date = datetime.date.fromisoformat(date_str)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"Invalid date format: {date_str}. Use YYYY-MM-DD.")
+
+            # Validate numeric fields (must be non-negative numbers, not NaN)
+            def validate_numeric(value, field_name):
+                if value is None:
+                    return 0
+                if not isinstance(value, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid number")
+                if value != value:  # NaN check
+                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be NaN")
+                if value < 0:
+                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
+                return float(value)
+
+            calories = validate_numeric(meal_data.get("calories"), "calories")
+            protein = validate_numeric(meal_data.get("protein"), "protein")
+            carbs = validate_numeric(meal_data.get("carbs"), "carbs")
+            fat = validate_numeric(meal_data.get("fat"), "fat")
+            weight_g = validate_numeric(meal_data.get("weight_g"), "weight_g")
+
             meal = Meal(
                 user_id=current_user.id,
-                meal_date=datetime.date.fromisoformat(meal_data.get("meal_date", datetime.date.today().isoformat())),
+                meal_date=meal_date,
                 name=meal_data.get("name", "Imported Meal"),
-                calories=meal_data.get("calories", 0),
-                protein=meal_data.get("protein", 0),
-                carbs=meal_data.get("carbs", 0),
-                fat=meal_data.get("fat", 0),
-                weight_g=meal_data.get("weight_g", 0),
+                calories=calories,
+                protein=protein,
+                carbs=carbs,
+                fat=fat,
+                weight_g=weight_g,
             )
             db.add(meal)
         await db.flush()
@@ -724,13 +766,30 @@ async def import_data(
     # Import presets
     if data.presets:
         for preset_data in data.presets:
+            # Validate numeric fields for presets
+            def validate_numeric(value, field_name):
+                if value is None:
+                    return 0
+                if not isinstance(value, (int, float)):
+                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid number")
+                if value != value:  # NaN check
+                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be NaN")
+                if value < 0:
+                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
+                return float(value)
+
+            calories = validate_numeric(preset_data.get("calories"), "calories")
+            protein = validate_numeric(preset_data.get("protein"), "protein")
+            carbs = validate_numeric(preset_data.get("carbs"), "carbs")
+            fat = validate_numeric(preset_data.get("fat"), "fat")
+
             preset = Preset(
                 user_id=current_user.id,
                 name=preset_data.get("name", "Imported Preset"),
-                calories=preset_data.get("calories", 0),
-                protein=preset_data.get("protein", 0),
-                carbs=preset_data.get("carbs", 0),
-                fat=preset_data.get("fat", 0),
+                calories=calories,
+                protein=protein,
+                carbs=carbs,
+                fat=fat,
                 description=preset_data.get("description", ""),
             )
             db.add(preset)
