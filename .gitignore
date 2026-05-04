@@ -13,3 +13,7 @@ venv
 # Environment secrets
 .env
 context.md
+
+# Git worktrees
+.worktrees
+worktrees
