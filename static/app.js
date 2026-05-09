@@ -150,6 +150,9 @@
         profileGender: $("profile-gender"),
         profileActivity: $("profile-activity"),
         profileGoal: $("profile-goal"),
+        settingsOldPassword: $("setting-old-password"),
+        settingsNewPassword: $("setting-new-password"),
+        btnChangePasswordSettings: $("btn-change-password-settings"),
     };
 
     // ══════════════════════════════════════════
@@ -239,6 +242,24 @@
         stopCamera();
         stopBarcodeScanner();
         showView("login");
+    }
+
+    // ══════════════════════════════════════════
+    // SETTINGS PASSWORD CHANGE
+    // ═════════════════════════════════════════=
+    async function handleSettingsPasswordChange() {
+        const oldPw = els.settingsOldPassword.value;
+        const newPw = els.settingsNewPassword.value;
+        if (!oldPw || !newPw) { alert("Please fill in both password fields"); return; }
+        if (newPw.length < 4) { alert("New password must be at least 4 characters"); return; }
+        try {
+            await apiPut("/api/auth/change-password", { old_password: oldPw, new_password: newPw });
+            alert("Password updated successfully!");
+            els.settingsOldPassword.value = "";
+            els.settingsNewPassword.value = "";
+        } catch (e) {
+            alert("Failed to update password: " + e.message);
+        }
     }
 
     // ══════════════════════════════════════════
@@ -559,10 +580,71 @@
         });
 
         list.querySelectorAll(".meal-card").forEach((card) => {
-            card.addEventListener("click", () => {
+            card.addEventListener("click", async () => {
                 const id = card.dataset.mealId;
-                getTodayMeals().then((fresh) => openEditMeal(id, fresh.meals));
+                const groupToken = card.dataset.groupToken;
+                const fresh = await getTodayMeals();
+                
+                if (groupToken) {
+                    const groupMeal = fresh.meals.find(m => m.group_token === groupToken);
+                    if (groupMeal && groupMeal.items) {
+                        showGroupMealDetails(groupMeal);
+                        return;
+                    }
+                }
+                
+                openEditMeal(id, fresh.meals);
             });
+        });
+        
+        list.querySelectorAll(".meal-card-group").forEach((card) => {
+            card.addEventListener("click", async () => {
+                const groupToken = card.dataset.groupToken;
+                if (!groupToken) return;
+                const fresh = await getTodayMeals();
+                const groupMeal = fresh.meals.find(m => m.group_token === groupToken);
+                if (groupMeal && groupMeal.items) {
+                    showGroupMealDetails(groupMeal);
+                }
+            });
+        });
+    }
+    
+    function showGroupMealDetails(meal) {
+        const itemsHtml = meal.items.map(name => `<div class="group-detail-item"><span>${escapeHtml(name)}</span></div>`).join("");
+        const html = `
+            <div class="modal-overlay">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h3>Meal Details</h3>
+                        <button class="modal-close" id="modal-close-group">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        ${itemsHtml}
+                        <div class="group-detail-totals">
+                            <div class="gdt-row"><span>Total Calories</span><span>${Math.round(meal.calories)} kcal</span></div>
+                            <div class="gdt-row"><span>Protein</span><span>${Math.round(meal.protein)}g</span></div>
+                            <div class="gdt-row"><span>Carbs</span><span>${Math.round(meal.carbs)}g</span></div>
+                            <div class="gdt-row"><span>Fat</span><span>${Math.round(meal.fat)}g</span></div>
+                            <div class="gdt-row"><span>Weight</span><span>${Math.round(meal.weight_g)}g</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        
+        const modalContainer = document.createElement("div");
+        modalContainer.id = "group-meal-modal";
+        modalContainer.innerHTML = html;
+        document.body.appendChild(modalContainer);
+        
+        $("modal-close-group").addEventListener("click", () => {
+            modalContainer.remove();
+        });
+        
+        modalContainer.querySelector(".modal-overlay").addEventListener("click", (e) => {
+            if (e.target.classList.contains("modal-overlay")) {
+                modalContainer.remove();
+            }
         });
     }
 
@@ -1052,8 +1134,15 @@
 
             showView("barcode");
 
+            let lastScanTime = 0;
+            const scanDelay = 300;
+
             codeReader.decodeFromVideoDevice(backCamera.deviceId, "barcode-video", (result, err) => {
                 if (result) {
+                    const now = Date.now();
+                    if (now - lastScanTime < scanDelay) return;
+                    lastScanTime = now;
+                    
                     const barcode = result.getText();
                     if (barcodeScannedInvalid.has(barcode)) return;
                     handleBarcodeScan(barcode);
@@ -1251,6 +1340,7 @@
 
         $("btn-settings-back").addEventListener("click", saveSettings);
         $("btn-reset-today").addEventListener("click", resetToday);
+        els.btnChangePasswordSettings.addEventListener("click", handleSettingsPasswordChange);
         els.btnExportData.addEventListener("click", exportData);
         els.btnImportData.addEventListener("click", importData);
         els.fileImport.addEventListener("change", handleFileImport);
