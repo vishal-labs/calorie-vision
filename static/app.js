@@ -518,7 +518,10 @@
                 if (m.is_group && m.items && m.items.length > 0) {
                     // Render as expandable grouped card
                     const itemsHtml = m.items
-                        .map((name) => `<div class="meal-group-item">${escapeHtml(name)}</div>`)
+                        .map((item) => `<div class="meal-group-item">
+                            <span>${escapeHtml(item.name || item)}</span>
+                            ${item.calories !== undefined ? `<span>${Math.round(item.calories)} kcal</span>` : ""}
+                        </div>`)
                         .join("");
                     return `
                 <div class="meal-card meal-card-group" data-meal-id="${m.id}" data-group-token="${m.group_token || ""}">
@@ -611,7 +614,23 @@
     }
     
     function showGroupMealDetails(meal) {
-        const itemsHtml = meal.items.map(name => `<div class="group-detail-item"><span>${escapeHtml(name)}</span></div>`).join("");
+        const itemsHtml = meal.items.map((item) => {
+            if (typeof item === "string") {
+                return `<div class="group-detail-item"><span>${escapeHtml(item)}</span></div>`;
+            }
+            return `<div class="group-detail-item group-detail-item-rich">
+                <div class="group-detail-item-header">
+                    <span>${escapeHtml(item.name)}</span>
+                    <strong>${Math.round(item.calories)} kcal</strong>
+                </div>
+                <div class="group-detail-macros">
+                    <span>P:${Math.round(item.protein)}g</span>
+                    <span>C:${Math.round(item.carbs)}g</span>
+                    <span>F:${Math.round(item.fat)}g</span>
+                    <span>${Math.round(item.weight_g)}g</span>
+                </div>
+            </div>`;
+        }).join("");
         const html = `
             <div class="modal-overlay">
                 <div class="modal-content">
@@ -1107,6 +1126,7 @@
     let barcodeCurrentProduct = null;
     let barcodeCurrentPortion = 1;
     let barcodeScannedInvalid = new Set();
+    let barcodeLookupInProgress = false;
     const BARCODE_MAX_INVALID = 4;
 
     const nutriScoreDescriptions = {
@@ -1119,6 +1139,7 @@
 
     async function startBarcodeScanner() {
         barcodeScannedInvalid = new Set();
+        barcodeLookupInProgress = false;
         try {
             codeReader = new ZXing.BrowserMultiFormatReader();
             const videoInputDevices = await codeReader.listVideoInputDevices();
@@ -1163,8 +1184,11 @@
     }
 
     async function handleBarcodeScan(barcode) {
+        if (barcodeLookupInProgress) return;
+        barcodeLookupInProgress = true;
         try {
-            const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`);
+            const fields = "status,product_name,generic_name,serving_quantity,serving_size,nutriscore_grade,nutriments";
+            const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=${fields}`);
             const data = await res.json();
             if (data.status === 1 && data.product) {
                 stopBarcodeScanner();
@@ -1179,6 +1203,7 @@
                     alert(`Unable to identify product after ${BARCODE_MAX_INVALID} attempts. Please try again.`);
                     showView("home");
                 }
+                barcodeLookupInProgress = false;
             }
         } catch (err) {
             barcodeScannedInvalid.add(barcode);
@@ -1187,6 +1212,7 @@
                 alert("Network error while looking up product.");
                 showView("home");
             }
+            barcodeLookupInProgress = false;
         }
     }
 

@@ -39,6 +39,19 @@ load_dotenv()
 LLM_MODEL = "google/gemma-4-31b-it:free"
 
 
+def meal_breakdown_item(meal: Meal) -> dict:
+    """Serialize a persisted meal as a grouped-meal nutrition breakdown item."""
+    return {
+        "id": meal.id,
+        "name": meal.name,
+        "calories": meal.calories,
+        "protein": meal.protein,
+        "carbs": meal.carbs,
+        "fat": meal.fat,
+        "weight_g": meal.weight_g,
+    }
+
+
 # ══════════════════════════════════════════════
 # Helper Functions
 # ══════════════════════════════════════════════
@@ -365,7 +378,6 @@ async def get_meals(
         if group_meals:
             # Use first meal's data as group summary
             first = group_meals[0]
-            item_names = [m.name for m in group_meals]
             response_meals.append(MealResponse(
                 id=first.id,
                 meal_date=first.meal_date,
@@ -377,7 +389,7 @@ async def get_meals(
                 weight_g=sum(m.weight_g for m in group_meals),
                 group_token=token,
                 is_group=True,
-                items=item_names,
+                items=[meal_breakdown_item(m) for m in group_meals],
             ))
             total_cal += sum(m.calories for m in group_meals)
             total_protein += sum(m.protein for m in group_meals)

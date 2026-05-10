@@ -45,6 +45,16 @@ class MealCreate(BaseModel):
     group_token: str | None = None
 
 
+class MealBreakdownItem(BaseModel):
+    id: int
+    name: str
+    calories: float
+    protein: float
+    carbs: float
+    fat: float
+    weight_g: float
+
+
 class MealResponse(BaseModel):
     model_config = {"from_attributes": True}
 
@@ -58,7 +68,7 @@ class MealResponse(BaseModel):
     weight_g: float
     group_token: str | None = None
     is_group: bool = False
-    items: list[str] | None = None
+    items: list[MealBreakdownItem] | None = None
 
 
 class MealListResponse(BaseModel):

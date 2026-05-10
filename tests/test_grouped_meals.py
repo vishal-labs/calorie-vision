@@ -20,8 +20,14 @@ class TestGroupedMeals:
         data = meals.json()
         assert len(data["meals"]) == 1
         assert data["meals"][0]["is_group"]
-        assert "Rice" in data["meals"][0]["items"]
-        assert "Chicken Curry" in data["meals"][0]["items"]
+        items = data["meals"][0]["items"]
+        assert {item["name"] for item in items} == {"Rice", "Chicken Curry"}
+        rice = next(item for item in items if item["name"] == "Rice")
+        assert rice["calories"] == 200
+        assert rice["protein"] == 4
+        assert rice["carbs"] == 44
+        assert rice["fat"] == 0.5
+        assert rice["weight_g"] == 150
 
     async def test_single_meal_not_grouped(self, client: AsyncClient, db_session):
         user = await create_test_user(db_session)
