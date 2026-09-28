@@ -86,8 +86,6 @@
         home: $("view-home"),
         manual: $("view-manual"),
         camera: $("view-camera"),
-        barcode: $("view-barcode"),
-        barcodeResult: $("view-barcode-result"),
         review: $("view-review"),
         loading: $("view-loading"),
         results: $("view-results"),
@@ -117,8 +115,6 @@
         historyList: $("history-list"),
         historySection: $("history-section"),
         cameraPreview: $("camera-preview"),
-        barcodeVideo: $("barcode-video"),
-        barcodeResultContent: $("barcode-result-content"),
         capturedCanvas: $("captured-canvas"),
         foodDescription: $("food-description"),
         resultsItems: $("results-items"),
@@ -164,8 +160,25 @@
         if (v) v.classList.add("active");
 
         const header = $("app-header");
-        const hideHeader = ["login", "forgotPassword", "camera", "barcode", "barcodeResult", "loading", "review"].includes(name);
+        const hideHeader = ["login", "forgotPassword", "camera", "loading", "review"].includes(name);
         header.style.display = hideHeader ? "none" : "";
+    }
+
+    // ══════════════════════════════════════════
+    // TOASTS
+    // ══════════════════════════════════════════
+    function toast(msg, type = "info") {
+        const root = $("toast-root");
+        if (!root) { alert(msg); return; }
+        const el = document.createElement("div");
+        el.className = `toast toast-${type}`;
+        el.setAttribute("role", "status");
+        el.textContent = msg;
+        root.appendChild(el);
+        setTimeout(() => {
+            el.classList.add("out");
+            setTimeout(() => el.remove(), 300);
+        }, 2400);
     }
 
     // ══════════════════════════════════════════
@@ -240,7 +253,6 @@
     function handleLogout() {
         clearAuth();
         stopCamera();
-        stopBarcodeScanner();
         showView("login");
     }
 
@@ -250,15 +262,15 @@
     async function handleSettingsPasswordChange() {
         const oldPw = els.settingsOldPassword.value;
         const newPw = els.settingsNewPassword.value;
-        if (!oldPw || !newPw) { alert("Please fill in both password fields"); return; }
-        if (newPw.length < 4) { alert("New password must be at least 4 characters"); return; }
+        if (!oldPw || !newPw) { toast("Please fill in both password fields", "error"); return; }
+        if (newPw.length < 4) { toast("New password must be at least 4 characters", "error"); return; }
         try {
             await apiPut("/api/auth/change-password", { old_password: oldPw, new_password: newPw });
-            alert("Password updated successfully!");
+            toast("Password updated successfully!", "success");
             els.settingsOldPassword.value = "";
             els.settingsNewPassword.value = "";
         } catch (e) {
-            alert("Failed to update password: " + e.message);
+            toast("Failed to update password: " + e.message, "error");
         }
     }
 
@@ -331,8 +343,8 @@
                 reset_token: resetToken,
                 new_password: newPassword
             });
-            
-            alert("Password reset successful! Please login with your new password.");
+
+            toast("Password reset successful! Please login with your new password.", "success");
             showView("login");
         } catch (e) {
             els.forgotError.textContent = e.message || "Failed to reset password";
@@ -561,7 +573,7 @@
                 try {
                     await apiDelete(`/api/meals/${id}`);
                 } catch (err) {
-                    alert("Failed to remove meal: " + err.message);
+                    toast("Failed to remove meal: " + err.message, "error");
                     btn.disabled = false;
                     return;
                 }
@@ -739,7 +751,7 @@
             els.cameraPreview.play();
             showView("camera");
         } catch (err) {
-            alert("Camera access denied or unavailable.");
+            toast("Camera access denied or unavailable.", "error");
             console.error(err);
         }
     }
@@ -780,7 +792,7 @@
             renderResults(res);
             showView("results");
         } catch (e) {
-            alert("Analysis failed. Please try again.");
+            toast("Analysis failed. Please try again.", "error");
             console.error(e);
             showView("home");
             updateHeader();
@@ -888,9 +900,9 @@
         const name = $("manual-name").value.trim();
         const calStr = $("manual-calories").value.trim();
         const desc = $("manual-desc").value.trim();
-        if (!name || !calStr) { alert("Meal name and calories are required."); return; }
+        if (!name || !calStr) { toast("Meal name and calories are required.", "error"); return; }
         const calories = parseFloat(calStr);
-        if (isNaN(calories)) { alert("Please enter a valid number for calories."); return; }
+        if (isNaN(calories)) { toast("Please enter a valid number for calories.", "error"); return; }
         const protein = parseFloat($("manual-protein").value) || 0;
         const carbs = parseFloat($("manual-carbs").value) || 0;
         const fat = parseFloat($("manual-fat").value) || 0;
@@ -901,11 +913,14 @@
         try {
             await apiPost("/api/meals", { name, calories, protein, carbs, fat, weight_g: 0, meal_date: todayStr() });
         } catch (e) {
-            alert("Failed to save meal: " + e.message);
+            toast("Failed to save meal: " + e.message, "error");
             return;
         }
         if (els.manualSavePreset.checked) {
             try { await apiPost("/api/presets", { name, calories, protein, carbs, fat, description: desc }); } catch (e) { /* ignore */ }
+            toast("Meal saved and preset created", "success");
+        } else {
+            toast("Meal saved", "success");
         }
         await Promise.all([renderMealLog(), renderHistory(), updateHeader(), renderProfilePreview()]);
         showView("home");
@@ -929,7 +944,8 @@
         const presetId = els.manualPresets.value;
         if (!presetId) return;
         if (!confirm("Delete this preset?")) return;
-        try { await apiDelete(`/api/presets/${presetId}`); } catch (e) { alert("Failed to delete preset."); return; }
+        try { await apiDelete(`/api/presets/${presetId}`); } catch (e) { toast("Failed to delete preset.", "error"); return; }
+        toast("Preset deleted", "success");
         await populateManualPresets();
         els.btnDeletePreset.style.display = "none";
         ["manual-name","manual-calories","manual-protein","manual-carbs","manual-fat","manual-desc"].forEach(id => $(id).value = "");
@@ -1024,7 +1040,7 @@
     async function saveSettings() {
         const newBudget = parseInt(els.settingBudget.value, 10);
         if (isNaN(newBudget) || newBudget < 500) {
-            alert("Budget must be at least 500 kcal.");
+            toast("Budget must be at least 500 kcal.", "error");
             return;
         }
         await apiPut("/api/budget", { daily_calories: newBudget });
@@ -1045,10 +1061,11 @@
         if (goal) profileData.goal = goal;
 
         if (Object.keys(profileData).length > 0) {
-            try { await apiPut("/api/profile", profileData); } catch (e) { /* ignore */ }
+            try { await apiPut("/api/profile", profileData); } catch (e) { toast("Failed to save profile: " + e.message, "error"); }
         }
 
         await Promise.all([updateHeader(), renderProfilePreview()]);
+        toast("Settings saved", "success");
         showView("home");
     }
 
@@ -1075,7 +1092,8 @@
             a.download = `calorievision-backup-${todayStr()}.json`;
             a.click();
             URL.revokeObjectURL(url);
-        } catch (e) { alert("Export failed: " + e.message); }
+            toast("Backup downloaded", "success");
+        } catch (e) { toast("Export failed: " + e.message, "error"); }
     }
 
     function importData() { els.fileImport.click(); }
@@ -1089,8 +1107,8 @@
                 const data = JSON.parse(reader.result);
                 await apiPut("/api/import", data);
                 await Promise.all([updateHeader(), renderMealLog(), renderHistory(), renderProfilePreview()]);
-                alert("Data imported successfully.");
-            } catch (err) { alert("Invalid backup file."); console.error(err); }
+                toast("Data imported successfully.", "success");
+            } catch (err) { toast("Invalid backup file.", "error"); console.error(err); }
         };
         reader.readAsText(file);
         event.target.value = "";
@@ -1120,198 +1138,6 @@
     }
 
     // ══════════════════════════════════════════
-    // BARCODE SCANNER
-    // ══════════════════════════════════════════
-    let codeReader = null;
-    let barcodeCurrentProduct = null;
-    let barcodeCurrentPortion = 1;
-    let barcodeScannedInvalid = new Set();
-    let barcodeLookupInProgress = false;
-    const BARCODE_MAX_INVALID = 4;
-
-    const nutriScoreDescriptions = {
-        a: "Excellent nutritional quality. Low in saturated fat, sugar, and sodium while rich in fiber and protein.",
-        b: "Good nutritional quality with balanced nutrients and moderate fat and sugar levels.",
-        c: "Average nutritional quality. Contains moderate amounts of fat, sugar, or sodium.",
-        d: "Below average nutritional quality. Higher in fat, saturated fat, sugar, or sodium.",
-        e: "Poor nutritional quality. High in calories, saturated fat, sugar, or sodium.",
-    };
-
-    async function startBarcodeScanner() {
-        barcodeScannedInvalid = new Set();
-        barcodeLookupInProgress = false;
-        try {
-            codeReader = new ZXing.BrowserMultiFormatReader();
-            const videoInputDevices = await codeReader.listVideoInputDevices();
-            const backCamera = videoInputDevices.find(
-                (d) => d.label.toLowerCase().includes("back") || d.label.toLowerCase().includes("environment")
-            ) || videoInputDevices[videoInputDevices.length - 1];
-
-            if (!backCamera) {
-                alert("No camera found.");
-                showView("home");
-                return;
-            }
-
-            showView("barcode");
-
-            let lastScanTime = 0;
-            const scanDelay = 300;
-
-            codeReader.decodeFromVideoDevice(backCamera.deviceId, "barcode-video", (result, err) => {
-                if (result) {
-                    const now = Date.now();
-                    if (now - lastScanTime < scanDelay) return;
-                    lastScanTime = now;
-                    
-                    const barcode = result.getText();
-                    if (barcodeScannedInvalid.has(barcode)) return;
-                    handleBarcodeScan(barcode);
-                }
-            });
-        } catch (err) {
-            alert("Camera access denied.");
-            console.error(err);
-            showView("home");
-        }
-    }
-
-    function stopBarcodeScanner() {
-        if (codeReader) {
-            codeReader.reset();
-            codeReader = null;
-        }
-    }
-
-    async function handleBarcodeScan(barcode) {
-        if (barcodeLookupInProgress) return;
-        barcodeLookupInProgress = true;
-        try {
-            const fields = "status,product_name,generic_name,serving_quantity,serving_size,nutriscore_grade,nutriments";
-            const res = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json?fields=${fields}`);
-            const data = await res.json();
-            if (data.status === 1 && data.product) {
-                stopBarcodeScanner();
-                barcodeCurrentProduct = data.product;
-                barcodeCurrentPortion = 1;
-                renderBarcodeResult(data.product);
-                showView("barcodeResult");
-            } else {
-                barcodeScannedInvalid.add(barcode);
-                if (barcodeScannedInvalid.size >= BARCODE_MAX_INVALID) {
-                    stopBarcodeScanner();
-                    alert(`Unable to identify product after ${BARCODE_MAX_INVALID} attempts. Please try again.`);
-                    showView("home");
-                }
-                barcodeLookupInProgress = false;
-            }
-        } catch (err) {
-            barcodeScannedInvalid.add(barcode);
-            if (barcodeScannedInvalid.size >= BARCODE_MAX_INVALID) {
-                stopBarcodeScanner();
-                alert("Network error while looking up product.");
-                showView("home");
-            }
-            barcodeLookupInProgress = false;
-        }
-    }
-
-    function renderBarcodeResult(product) {
-        const name = product.product_name || product.generic_name || "Unknown Product";
-        const grade = product.nutriscore_grade ? product.nutriscore_grade.toLowerCase() : null;
-        const portion = barcodeCurrentPortion;
-        const nutriments = product.nutriments || {};
-
-        const baseKcal = nutriments["energy-kcal_100g"] || nutriments["energy-kcal"] || 0;
-        const baseProtein = nutriments.proteins_100g || nutriments.proteins || 0;
-        const baseCarbs = nutriments.carbohydrates_100g || nutriments.carbohydrates || 0;
-        const baseFat = nutriments.fat_100g || nutriments.fat || 0;
-        const servingQty = (product.serving_quantity || product.serving_size
-            ? parseFloat(product.serving_quantity || product.serving_size)
-            : 100) || 100;
-        const factor = (servingQty / 100) * portion;
-
-        const kcal = baseKcal * factor;
-        const protein = baseProtein * factor;
-        const carbs = baseCarbs * factor;
-        const fat = baseFat * factor;
-        const sugar = (nutriments.sugars_100g || 0) * factor;
-        const sodium = (nutriments.sodium_100g || 0) * factor;
-        const satFat = (nutriments["saturated-fat_100g"] || 0) * factor;
-
-        const grades = ["a", "b", "c", "d", "e"];
-        const gradeHtml = grade
-            ? grades.map((g) => `<div class="ns-square ns-${g}${g === grade ? " active" : ""}">${g.toUpperCase()}</div>`).join("")
-            : "";
-
-        const statusText = grade ? nutriScoreDescriptions[grade] || "" : "No Nutri-Score available";
-
-        els.barcodeResultContent.innerHTML = `
-            <div class="barcode-new-layout">
-                <div class="br-name-box">${escapeHtml(name)}</div>
-                ${grade ? `<div class="br-section ns-section">
-                    <span class="ns-label">Nutri-Score</span>
-                    <div class="ns-row"><div class="ns-badges">${gradeHtml}</div><div class="ns-status">${statusText}</div></div>
-                </div>` : ""}
-                <div class="portion-row">
-                    ${[0.25, 0.5, 1, 1.5, 2].map((p) =>
-                        `<button class="portion-btn${p === portion ? " active" : ""}" data-portion="${p}">${p === 1 ? "1x" : p + "x"}</button>`
-                    ).join("")}
-                </div>
-                <div class="br-macros-grid">
-                    <div class="br-macro-card"><span class="br-macro-val">${Math.round(kcal)}</span><span class="br-macro-unit">kcal</span><span class="br-macro-label">Calories</span></div>
-                    <div class="br-macro-card"><span class="br-macro-val">${protein.toFixed(1)}</span><span class="br-macro-unit">g</span><span class="br-macro-label">Protein</span></div>
-                    <div class="br-macro-card"><span class="br-macro-val">${carbs.toFixed(1)}</span><span class="br-macro-unit">g</span><span class="br-macro-label">Carbs</span></div>
-                    <div class="br-macro-card"><span class="br-macro-val">${fat.toFixed(1)}</span><span class="br-macro-unit">g</span><span class="br-macro-label">Fat</span></div>
-                </div>
-                <div class="br-section">
-                    <div class="br-section-title">Nutrition (per portion)</div>
-                    <div class="br-detailed-grid">
-                        <div class="br-detail-card"><span class="br-detail-val">${sugar.toFixed(1)}g</span><span class="br-detail-label">Sugar</span></div>
-                        <div class="br-detail-card"><span class="br-detail-val">${sodium.toFixed(1)}g</span><span class="br-detail-label">Sodium</span></div>
-                        <div class="br-detail-card"><span class="br-detail-val">${satFat.toFixed(1)}g</span><span class="br-detail-label">Sat. Fat</span></div>
-                    </div>
-                </div>
-            </div>`;
-
-        els.barcodeResultContent.querySelectorAll(".portion-btn").forEach((btn) => {
-            btn.addEventListener("click", () => {
-                barcodeCurrentPortion = parseFloat(btn.dataset.portion);
-                renderBarcodeResult(product);
-            });
-        });
-    }
-
-    async function saveBarcodeMeal() {
-        if (!barcodeCurrentProduct) return;
-        const nutriments = barcodeCurrentProduct.nutriments || {};
-        const servingQty = (barcodeCurrentProduct.serving_quantity || barcodeCurrentProduct.serving_size
-            ? parseFloat(barcodeCurrentProduct.serving_quantity || barcodeCurrentProduct.serving_size)
-            : 100) || 100;
-        const factor = (servingQty / 100) * barcodeCurrentPortion;
-
-        const name = barcodeCurrentProduct.product_name || barcodeCurrentProduct.generic_name || "Unknown Product";
-        const calories = (nutriments["energy-kcal_100g"] || 0) * factor;
-        const protein = (nutriments.proteins_100g || 0) * factor;
-        const carbs = (nutriments.carbohydrates_100g || 0) * factor;
-        const fat = (nutriments.fat_100g || 0) * factor;
-
-        try {
-            await apiPost("/api/meals", {
-                name, calories, protein, carbs, fat,
-                weight_g: servingQty * barcodeCurrentPortion, meal_date: todayStr(),
-            });
-        } catch (e) {
-            alert("Failed to log item: " + e.message);
-            return;
-        }
-
-        barcodeCurrentProduct = null;
-        await Promise.all([renderMealLog(), renderHistory(), updateHeader(), renderProfilePreview()]);
-        showView("home");
-    }
-
-    // ══════════════════════════════════════════
     // EVENT BINDINGS
     // ══════════════════════════════════════════
     function init() {
@@ -1334,13 +1160,11 @@
         $("btn-settings").addEventListener("click", openSettings);
 
         $("btn-scan").addEventListener("click", startCamera);
-        $("btn-barcode").addEventListener("click", startBarcodeScanner);
         $("btn-upload").addEventListener("click", () => $("file-upload").click());
         $("btn-manual").addEventListener("click", openManualAdd);
         $("file-upload").addEventListener("change", handleFileUpload);
 
         $("btn-camera-back").addEventListener("click", () => { stopCamera(); showView("home"); });
-        $("btn-barcode-back").addEventListener("click", () => { stopBarcodeScanner(); showView("home"); });
         $("btn-capture").addEventListener("click", captureImage);
 
         $("btn-retake").addEventListener("click", async () => { await startCamera(); });
@@ -1348,9 +1172,6 @@
 
         $("btn-consume").addEventListener("click", consumeMeal);
         $("btn-discard").addEventListener("click", () => { lastAnalysisResult = null; showView("home"); });
-
-        $("btn-barcode-save").addEventListener("click", saveBarcodeMeal);
-        $("btn-barcode-discard").addEventListener("click", () => { barcodeCurrentProduct = null; showView("home"); });
 
         $("btn-manual-cancel").addEventListener("click", () => showView("home"));
         $("btn-manual-save").addEventListener("click", saveManualMeal);
