@@ -36,7 +36,7 @@ from auth import (
 
 load_dotenv()
 
-LLM_MODEL = "google/gemma-4-31b-it:free"
+LLM_MODEL = "google/gemma-4-31b-it"
 
 
 def meal_breakdown_item(meal: Meal) -> dict:
