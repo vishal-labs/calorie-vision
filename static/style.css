@@ -397,7 +397,7 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .screen-dark { background: #000; }
 .screen-head { display: flex; align-items: center; gap: 8px; padding: calc(var(--sat) + 8px) 12px 8px; max-width: var(--page); width: 100%; margin: 0 auto; }
 .screen-title { flex: 1; text-align: center; margin: 0; font-size: 17px; font-weight: 600; }
-.screen-body { flex: 1; overflow-y: auto; padding: 8px 20px 24px; max-width: var(--page); width: 100%; margin: 0 auto; display: grid; gap: 18px; align-content: start; -webkit-overflow-scrolling: touch; }
+.screen-body { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 8px 20px 24px; max-width: var(--page); width: 100%; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; -webkit-overflow-scrolling: touch; }
 .screen-foot { display: flex; gap: 10px; padding: 12px 20px calc(var(--sab) + 14px); max-width: var(--page); width: 100%; margin: 0 auto; border-top: 1px solid var(--line); background: var(--bg); }
 
 /* Camera */
@@ -501,6 +501,12 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .score-sub { font-size: 13px; color: var(--ink-3); }
 .score-summary { margin: 0; color: var(--ink); font-size: 15.5px; }
 .score-card.is-unrated .score-label { color: var(--ink-2); }
+.score-card.is-pending .ns-scale span { animation: ns-pulse 1.1s ease-in-out infinite alternate; }
+.score-card.is-pending .ns-scale span:nth-child(2) { animation-delay: 0.15s; }
+.score-card.is-pending .ns-scale span:nth-child(3) { animation-delay: 0.3s; }
+.score-card.is-pending .ns-scale span:nth-child(4) { animation-delay: 0.45s; }
+.score-card.is-pending .ns-scale span:nth-child(5) { animation-delay: 0.6s; }
+@keyframes ns-pulse { from { opacity: 0.2; } to { opacity: 0.75; } }
 
 .facts { display: grid; gap: 4px; }
 .facts h3 { font-size: 15px; font-weight: 600; margin: 4px 0 4px; color: var(--ink-2); }
@@ -558,14 +564,14 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .sheet-grip { width: 40px; height: 5px; border-radius: 3px; background: var(--line-strong); margin: 10px auto 2px; flex: none; }
 .sheet-head { display: flex; align-items: center; gap: 8px; padding: 6px 12px 6px 20px; flex: none; }
 .sheet-title { flex: 1; margin: 0; font-family: var(--font-num); font-weight: 700; font-size: 22px; font-stretch: 85%; }
-.sheet-body { overflow-y: auto; padding: 8px 20px 20px; display: grid; gap: 16px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sheet-body { overflow-y: auto; overflow-x: hidden; padding: 8px 20px 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .sheet-foot { display: flex; gap: 10px; padding: 10px 20px 14px; border-top: 1px solid var(--line); flex: none; }
 .sheet .input { background: var(--bg); }
 .sheet .chip, .sheet .seg { background: var(--surface-2); }
 .sheet .seg-btn.is-on { background: var(--surface-3); }
 
 /* Add sheet */
-.add-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.add-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .add-tile {
     display: grid; gap: 10px; align-content: space-between; text-align: left;
     min-height: 108px; padding: 16px; border-radius: var(--r-m);

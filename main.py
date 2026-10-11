@@ -7,6 +7,7 @@ import os
 import re
 import json
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
@@ -1061,6 +1062,122 @@ async def get_product(
     return await food_facts.lookup(db, barcode)
 
 
+PRODUCT_RATING_PROMPT = """You rate packaged foods and drinks on the European Nutri-Score scale: A (healthiest), B, C, D, E (least healthy).
+
+Follow the official Nutri-Score (2023) logic as closely as you can:
+- Penalise energy, sugars, saturated fat and salt (and non-sugar sweeteners in drinks).
+- Credit protein, fibre, and fruit/vegetables/legumes/nuts/olive or rapeseed oil.
+- Drinks are judged more strictly than foods; only plain water gets A.
+When nutrition facts per 100 g are missing or incomplete, estimate typical values for this exact kind of product from its name, category, ingredients and package photo, and rate from those.
+
+Respond with ONLY valid JSON in this exact schema, no markdown or code fences:
+{
+  "grade": "c",
+  "summary": "One or two short, plain sentences on why it gets this grade.",
+  "negatives": [{"label": "High in sugar", "detail": "Short specific reason", "level": "high"}],
+  "positives": [{"label": "Good source of fibre", "detail": "Short specific reason", "level": "moderate"}],
+  "estimated_per_100g": {"calories": 0, "protein": 0, "carbs": 0, "sugars": 0, "fat": 0, "saturated_fat": 0, "fiber": 0, "salt": 0},
+  "confidence": "medium"
+}
+"grade" is one lowercase letter a-e. "level" is "high" or "moderate". Give at most 4 negatives and 4 positives (either list may be empty). "confidence" is "low", "medium" or "high". Always fill estimated_per_100g (per 100 ml for drinks)."""
+
+
+def normalize_product_rating(raw: dict) -> dict:
+    """Validate the model's product rating; raises ValueError if unusable."""
+    if not isinstance(raw, dict):
+        raise ValueError("Top-level JSON is not an object")
+    grade = str(raw.get("grade") or "").strip().lower()[:1]
+    if grade not in ("a", "b", "c", "d", "e"):
+        raise ValueError(f"Invalid grade {raw.get('grade')!r}")
+
+    def entries(key):
+        out = []
+        for e in (raw.get(key) or [])[:4]:
+            if not isinstance(e, dict) or not str(e.get("label") or "").strip():
+                continue
+            level = str(e.get("level") or "").lower()
+            out.append({
+                "label": str(e["label"]).strip()[:80],
+                "detail": (str(e.get("detail") or "").strip()[:160] or None),
+                "level": level if level in ("high", "moderate") else "moderate",
+            })
+        return out
+
+    est_raw = raw.get("estimated_per_100g") or {}
+    est = {}
+    if isinstance(est_raw, dict):
+        for k in food_facts.AI_NUTRIENTS:
+            if est_raw.get(k) is not None:
+                cap = 900 if k == "calories" else 100
+                est[k] = round(min(_to_float(est_raw.get(k)), cap), 2)
+    confidence = str(raw.get("confidence") or "").lower()
+    return {
+        "grade": grade,
+        "summary": str(raw.get("summary") or "").strip()[:400] or "Rated by AI from the product details.",
+        "negatives": entries("negatives"),
+        "positives": entries("positives"),
+        "estimated_per_100g": est,
+        "confidence": confidence if confidence in ("low", "medium", "high") else None,
+    }
+
+
+async def fetch_image_b64(url: str | None) -> str | None:
+    """Product photo as a data URL, so the model doesn't depend on fetching URLs itself."""
+    if not url or not url.startswith("https://images.openfoodfacts.org/"):
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=6.0, headers=food_facts.OFF_HEADERS) as client:
+            res = await client.get(url)
+        if res.status_code != 200 or len(res.content) > 2_000_000:
+            return None
+        mime = res.headers.get("content-type", "image/jpeg").split(";")[0]
+        return f"data:{mime};base64,{base64.b64encode(res.content).decode()}"
+    except httpx.HTTPError:
+        return None
+
+
+@app.post("/api/products/{barcode}/assess")
+async def assess_product(
+    barcode: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """AI Nutri-Score for products Open Food Facts can't grade. The result is cached
+    with the product, so each product is rated once."""
+    product = await food_facts.lookup(db, barcode)
+    if product["nutriscore"]["grade"]:
+        return product
+
+    facts = {k: v for k, v in (product.get("per_100g") or {}).items() if v is not None}
+    lines = [
+        f"Product: {product['name']}",
+        f"Brand: {product.get('brand') or 'unknown'}",
+        f"Type: {'drink' if product.get('is_beverage') else 'food'}",
+        f"Quantity: {product.get('quantity') or 'unknown'}",
+        f"Categories: {product.get('categories') or 'unknown'}",
+        f"Labels: {product.get('labels') or 'none'}",
+        f"Ingredients: {product.get('ingredients') or 'not listed'}",
+        f"Additives: {', '.join(product.get('additives') or []) or 'none listed'}",
+        f"NOVA processing group: {(product.get('nova') or {}).get('group') or 'unknown'}",
+        "Nutrition per 100 g/ml from the label: "
+        + (json.dumps(facts) if facts else "not available - estimate it"),
+    ]
+    user_content: list = [{"type": "text", "text": "\n".join(lines)}]
+    image = await fetch_image_b64(product.get("image_url"))
+    if image:
+        user_content.append({"type": "image_url", "image_url": {"url": image}})
+
+    try:
+        content = await call_llm(PRODUCT_RATING_PROMPT, user_content, max_tokens=900, temperature=0.2)
+        rating = normalize_product_rating(extract_json(content))
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=502, detail=f"The AI couldn't rate this product ({type(e).__name__}). Try again.")
+
+    product = food_facts.apply_ai_rating(product, rating)
+    await food_facts.save_product(db, product)
+    return product
+
+
 # ══════════════════════════════════════════════
 # AI ANALYSIS ENDPOINT
 # ══════════════════════════════════════════════
@@ -1145,42 +1262,23 @@ def extract_json(content: str) -> dict:
         return json.loads(content[start:end + 1])
 
 
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze_food(
-    request: AnalyzeRequest,
-    current_user: User = Depends(get_current_user),
-):
+async def call_llm(system_prompt: str, user_content: list, max_tokens: int = 1500,
+                   temperature: float = 0.3) -> str:
+    """One OpenRouter chat completion with retries; returns the text content."""
     if not OPENROUTER_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="OPENROUTER_API_KEY is not set. Add it to the .env file.",
         )
-
-    image = request.image
-    mime = "image/jpeg"
-    if image.startswith("data:"):
-        header, _, image = image.partition(",")
-        mime = header[5:].split(";")[0] or mime
-
-    hints = []
-    if request.description and request.description.strip():
-        hints.append(f"Description: {request.description.strip()}")
-    if request.remaining_calories is not None:
-        hints.append(f"Remaining calorie budget for today before this meal: {round(request.remaining_calories)} kcal")
-
-    user_content = [{"type": "text", "text": h} for h in hints]
-    user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
-
     payload = {
         "model": LLM_MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
-        "temperature": 0.3,
-        "max_tokens": 1500,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
     }
-
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
@@ -1215,14 +1313,42 @@ async def analyze_food(
                 )
 
     data = response.json()
-
     try:
         content = data["choices"][0]["message"]["content"]
         if isinstance(content, list):  # some providers return content parts
             content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        if not isinstance(content, str):
+            raise TypeError("content is not text")
+        return content
+    except (KeyError, IndexError, TypeError) as e:
+        logger.warning("Unexpected LLM response: %s", str(data)[:1000])
+        raise HTTPException(status_code=502, detail=f"Failed to parse the AI response ({type(e).__name__}).")
+
+
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+async def analyze_food(
+    request: AnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+):
+    image = request.image
+    mime = "image/jpeg"
+    if image.startswith("data:"):
+        header, _, image = image.partition(",")
+        mime = header[5:].split(";")[0] or mime
+
+    hints = []
+    if request.description and request.description.strip():
+        hints.append(f"Description: {request.description.strip()}")
+    if request.remaining_calories is not None:
+        hints.append(f"Remaining calorie budget for today before this meal: {round(request.remaining_calories)} kcal")
+
+    user_content = [{"type": "text", "text": h} for h in hints]
+    user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
+
+    try:
+        content = await call_llm(SYSTEM_PROMPT, user_content, max_tokens=1500)
         result = normalize_analysis(extract_json(content))
     except (KeyError, IndexError, TypeError, ValueError) as e:
-        logger.warning("Unparseable LLM response: %s", str(data)[:1000])
         raise HTTPException(
             status_code=502,
             detail=f"Failed to parse the AI response ({type(e).__name__}). Try again or add a description.",

@@ -172,3 +172,123 @@ class TestProductEndpoint:
     async def test_requires_auth(self, client: AsyncClient):
         res = await client.get("/api/products/3017620422003")
         assert res.status_code in (401, 403)
+
+
+UNRATED = {
+    "product_name": "Masala Peanuts",
+    "brands": "Haldiram's",
+    "categories": "Snacks, Salty snacks, Peanuts",
+    "ingredients_text": "Peanuts, gram flour, vegetable oil, salt, spices",
+    "image_front_small_url": "https://images.openfoodfacts.org/x.jpg",
+    "serving_quantity": "30",
+    "nutriments": {},
+}
+
+AI_REPLY = {
+    "grade": "D",
+    "summary": "Fried and salty, though peanuts bring protein.",
+    "negatives": [{"label": "High in salt", "detail": "Seasoned and fried", "level": "high"},
+                  {"label": "", "detail": "dropped: no label", "level": "high"}],
+    "positives": [{"label": "Good protein", "detail": "From peanuts", "level": "weird"}],
+    "estimated_per_100g": {"calories": "540 kcal", "protein": 20, "carbs": 30, "sugars": 3,
+                           "fat": 38, "saturated_fat": 6, "fiber": 6, "salt": 2.1},
+    "confidence": "medium",
+}
+
+
+class TestAiRating:
+    def test_normalize_rating(self):
+        import main
+        r = main.normalize_product_rating(AI_REPLY)
+        assert r["grade"] == "d"
+        assert len(r["negatives"]) == 1
+        assert r["positives"][0]["level"] == "moderate"
+        assert r["estimated_per_100g"]["calories"] == 540
+
+    @pytest.mark.parametrize("bad", [{"grade": "z"}, {"grade": None}, ["not", "a", "dict"]])
+    def test_normalize_rejects_bad_grades(self, bad):
+        import main
+        with pytest.raises(ValueError):
+            main.normalize_product_rating(bad)
+
+    async def test_assess_unrated_product(self, client: AsyncClient, db_session, monkeypatch):
+        import json
+        import main
+        llm_calls = []
+
+        async def fake_fetch(code):
+            return UNRATED
+
+        async def fake_llm(system_prompt, user_content, **kw):
+            llm_calls.append(user_content)
+            return json.dumps(AI_REPLY)
+
+        async def no_image(url):
+            return None
+
+        monkeypatch.setattr(food_facts, "fetch_from_off", fake_fetch)
+        monkeypatch.setattr(main, "call_llm", fake_llm)
+        monkeypatch.setattr(main, "fetch_image_b64", no_image)
+        headers = auth_headers(await create_test_user(db_session))
+
+        first = (await client.get("/api/products/3017620422003", headers=headers)).json()
+        assert first["nutriscore"]["grade"] is None
+        assert first["has_nutrition"] is False
+
+        res = await client.post("/api/products/3017620422003/assess", headers=headers)
+        assert res.status_code == 200
+        rated = res.json()
+        assert rated["nutriscore"]["grade"] == "d"
+        assert rated["nutriscore"]["source"] == "ai"
+        assert rated["nutriscore"]["rating"] == 2
+        assert rated["nutriscore"]["negatives"][0]["key"] == "ai"
+        assert rated["has_nutrition"] is True
+        assert rated["nutrition_source"] == "ai"
+        assert rated["per_100g"]["calories"] == 540
+        assert rated["per_serving"]["calories"] == pytest.approx(162)
+        prompt_text = llm_calls[0][0]["text"]
+        assert "Masala Peanuts" in prompt_text and "gram flour" in prompt_text
+
+        # Cached: later lookups and assessments don't call the AI again.
+        again = (await client.get("/api/products/3017620422003", headers=headers)).json()
+        assert again["nutriscore"]["grade"] == "d"
+        await client.post("/api/products/3017620422003/assess", headers=headers)
+        assert len(llm_calls) == 1
+
+    async def test_assess_skips_graded_products(self, client: AsyncClient, db_session, monkeypatch):
+        import main
+
+        async def fake_fetch(code):
+            return {**NUTELLA, "nutriscore_grade": "e"}
+
+        async def boom(*a, **kw):
+            raise AssertionError("AI must not be called for graded products")
+
+        monkeypatch.setattr(food_facts, "fetch_from_off", fake_fetch)
+        monkeypatch.setattr(main, "call_llm", boom)
+        headers = auth_headers(await create_test_user(db_session))
+        res = await client.post("/api/products/3017620422003/assess", headers=headers)
+        assert res.status_code == 200
+        assert res.json()["nutriscore"]["source"] == "openfoodfacts"
+
+    async def test_assess_bad_ai_output(self, client: AsyncClient, db_session, monkeypatch):
+        import main
+
+        async def fake_fetch(code):
+            return UNRATED
+
+        async def fake_llm(*a, **kw):
+            return "I think it's pretty healthy!"
+
+        monkeypatch.setattr(food_facts, "fetch_from_off", fake_fetch)
+        monkeypatch.setattr(main, "call_llm", fake_llm)
+        monkeypatch.setattr(main, "fetch_image_b64", lambda url: __import__("asyncio").sleep(0))
+        headers = auth_headers(await create_test_user(db_session))
+        res = await client.post("/api/products/3017620422003/assess", headers=headers)
+        assert res.status_code == 502
+        product = (await client.get("/api/products/3017620422003", headers=headers)).json()
+        assert product["nutriscore"]["grade"] is None
+
+    async def test_assess_requires_auth(self, client: AsyncClient):
+        res = await client.post("/api/products/3017620422003/assess")
+        assert res.status_code in (401, 403)

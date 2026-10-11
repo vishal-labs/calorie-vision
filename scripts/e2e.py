@@ -22,6 +22,10 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright, expect
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import food_facts  # noqa: E402
+import main as backend  # noqa: E402
+
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8765"
 SHOTS = Path(sys.argv[2] if len(sys.argv) > 2 else tempfile.mkdtemp(prefix="cv-shots-"))
 SHOTS.mkdir(parents=True, exist_ok=True)
@@ -67,6 +71,24 @@ def make_assets(browser, workdir: Path):
                         "-r", "10", "-pix_fmt", "yuv420p", str(y4m)], check=True)
     return frame_png, (y4m if y4m.exists() else None)
 
+
+UNRATED_CODE = "8901719123870"
+UNRATED_RAW = {
+    "product_name": "Parle-G Gold biscuits", "brands": "Parle", "quantity": "250 g", "product_quantity": "250",
+    "categories": "Snacks, Sweet snacks, Biscuits", "ingredients_text": "Wheat flour, sugar, edible vegetable oil, invert syrup, milk solids",
+    "serving_quantity": "25", "nutriments": {},
+}
+AI_RATING = {
+    "grade": "d", "summary": "Mostly refined flour and sugar with little fibre or protein.",
+    "negatives": [{"label": "High in sugar", "detail": "Sugar and invert syrup are main ingredients", "level": "high"},
+                  {"label": "Refined flour", "detail": "Little fibre", "level": "moderate"}],
+    "positives": [{"label": "Low in salt", "detail": "Mild sweet biscuit", "level": "moderate"}],
+    "estimated_per_100g": {"calories": 460, "protein": 7, "carbs": 76, "sugars": 26, "fat": 14,
+                           "saturated_fat": 6.5, "fiber": 2, "salt": 0.6},
+    "confidence": "medium",
+}
+UNRATED_PRODUCT = food_facts.normalize_product(UNRATED_CODE, UNRATED_RAW)
+RATED_PRODUCT = food_facts.apply_ai_rating(UNRATED_PRODUCT, backend.normalize_product_rating(AI_RATING))
 
 MOCK_ANALYSIS = {
     "meal_name": "Chicken rice bowl",
@@ -187,9 +209,13 @@ def main():
         page.keyboard.press("Escape")
         expect(page.locator(".sheet")).to_have_count(0)
 
-        # Android-style back closes a sheet
+        # Android-style back closes a sheet; the sheet must fit the phone even
+        # with a long "Log again" row (regression: it used to force sideways scrolling)
         page.click(".tabbar-fab")
         expect(page.locator(".sheet")).to_be_visible()
+        expect(page.locator(".quick-chip").first).to_be_visible()
+        widths = page.evaluate("() => [innerWidth, document.querySelector('.sheet-body').scrollWidth, document.documentElement.scrollWidth]")
+        assert widths[1] <= widths[0] and widths[2] <= widths[0], f"add sheet overflows: {widths}"
         page.go_back()
         expect(page.locator(".sheet")).to_have_count(0)
 
@@ -289,6 +315,29 @@ def main():
         shot(pg, "10-product-coke")
         pg.go_back()
         expect(pg.locator("#screen-product")).to_be_hidden()
+        # Product without a Nutri-Score → rated by AI (mocked), nutrition estimated
+        pg.route(f"**/api/products/{UNRATED_CODE}", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(UNRATED_PRODUCT)))
+
+        def slow_assess(route):
+            time.sleep(1.5)
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(RATED_PRODUCT))
+        pg.route(f"**/api/products/{UNRATED_CODE}/assess", slow_assess)
+        pg.click(".tabbar-fab")
+        pg.click('.sheet [data-action="open-scanner"]')
+        pg.fill("#barcode-input", UNRATED_CODE)
+        pg.click('#barcode-form button[type="submit"]')
+        expect(pg.locator(".score-label")).to_have_text("Rating…")
+        shot(pg, "10c-ai-rating-pending")
+        expect(pg.locator(".score-label")).to_have_text("Poor · 2/5", timeout=10000)
+        expect(pg.locator(".ns-scale .is-on")).to_have_text("d")
+        expect(pg.locator(".score-sub")).to_contain_text("rated by AI")
+        expect(pg.locator(".fact-name", has_text="High in sugar")).to_be_visible()
+        expect(pg.locator("#product-log")).to_have_text("Log 115 kcal")  # 25 g serving x 460 kcal/100 g
+        shot(pg, "10d-ai-rated")
+        pg.click("#product-log")
+        expect(pg.locator(".meal-row-name", has_text="Parle-G")).to_be_visible()
+
         # Unknown product → helpful fallback
         pg.click(".tabbar-fab")
         pg.click('.sheet [data-action="open-scanner"]')

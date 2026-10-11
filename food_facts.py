@@ -19,6 +19,7 @@ OFF_FIELDS = ",".join([
     "quantity", "product_quantity", "serving_size", "serving_quantity",
     "nutriments", "nutriscore_grade", "nutriscore_score", "nova_group",
     "categories_tags", "additives_tags", "allergens_tags", "ingredients_analysis_tags",
+    "categories", "ingredients_text", "ingredients_text_en", "labels",
 ])
 FOUND_TTL = datetime.timedelta(days=7)
 MISSING_TTL = datetime.timedelta(hours=12)
@@ -129,6 +130,8 @@ def normalize_product(code: str, p: dict) -> dict:
 
     name = (p.get("product_name") or p.get("product_name_en") or p.get("generic_name") or "").strip()
     brand = (p.get("brands") or "").split(",")[0].strip()
+    readable_categories = (p.get("categories") or ", ".join(
+        t.split(":", 1)[-1].replace("-", " ") for t in categories)).strip()
     return {
         "barcode": code,
         "name": name or "Unnamed product",
@@ -157,7 +160,63 @@ def normalize_product(code: str, p: dict) -> dict:
         "additives": [a.split(":", 1)[-1].upper() for a in additives][:20],
         "allergens": [a.split(":", 1)[-1].replace("-", " ") for a in (p.get("allergens_tags") or [])],
         "has_nutrition": per100["calories"] is not None,
+        "nutrition_source": "openfoodfacts" if per100["calories"] is not None else None,
+        # Context for the AI rating when Open Food Facts has no grade.
+        "categories": readable_categories[:400] or None,
+        "ingredients": ((p.get("ingredients_text") or p.get("ingredients_text_en") or "").strip()[:1500]) or None,
+        "labels": (p.get("labels") or "").strip()[:300] or None,
     }
+
+
+AI_NUTRIENTS = ("calories", "protein", "carbs", "sugars", "fat", "saturated_fat", "fiber", "salt")
+
+
+def apply_ai_rating(product: dict, ai: dict) -> dict:
+    """Merge a validated AI rating (see main.normalize_product_rating) into a product."""
+    product = json.loads(json.dumps(product))  # deep copy
+    grade = ai["grade"]
+    ns = product["nutriscore"]
+
+    def facts(entries):
+        return [{"key": "ai", "label": e["label"], "detail": e.get("detail"), "level": e["level"],
+                 "value": None, "unit": "", "points": None, "max_points": None, "share": None}
+                for e in entries]
+
+    ns.update({
+        "grade": grade,
+        "score": None,
+        "rating": nutriscore.GRADE_RATING[grade],
+        "label": nutriscore.GRADE_LABEL[grade],
+        "source": "ai",
+        "confidence": ai.get("confidence"),
+        "summary": ai["summary"],
+        "negatives": facts(ai["negatives"]),
+        "positives": facts(ai["positives"]),
+    })
+
+    est = ai.get("estimated_per_100g") or {}
+    if not product.get("has_nutrition") and est.get("calories"):
+        per100 = {k: est.get(k) for k in AI_NUTRIENTS}
+        product["per_100g"] = per100
+        serving_g = product.get("serving_g")
+        product["per_serving"] = (
+            {k: (round(v * serving_g / 100, 1) if v is not None else None) for k, v in per100.items()}
+            if serving_g else None
+        )
+        product["has_nutrition"] = True
+        product["nutrition_source"] = "ai"
+    return product
+
+
+async def save_product(db: AsyncSession, product: dict) -> None:
+    """Persist an updated product (e.g. after AI rating) into the cache row."""
+    cached = await db.get(ProductCache, product["barcode"])
+    if cached is None:
+        cached = ProductCache(barcode=product["barcode"], fetched_at=datetime.datetime.now(datetime.timezone.utc))
+        db.add(cached)
+    cached.found = True
+    cached.payload = json.dumps(product)
+    await db.flush()
 
 
 async def fetch_from_off(code: str) -> dict | None:

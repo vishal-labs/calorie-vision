@@ -1343,6 +1343,31 @@
         state.product = { ...product, grams: defaultPortion(product), mealType: currentMealType() };
         renderProduct();
         openScreen("screen-product", { replace: true });
+        if (!product.nutriscore.grade) rateWithAi();
+    }
+
+    /** Open Food Facts had no grade: ask the AI to rate it (cached server-side). */
+    async function rateWithAi() {
+        const p = state.product;
+        if (!p || p.nutriscore.grade || p.aiPending) return;
+        p.aiPending = true;
+        p.aiError = null;
+        renderProduct(true);
+        const isCurrent = () => state.product && state.product.barcode === p.barcode;
+        try {
+            const rated = await post(`/api/products/${encodeURIComponent(p.barcode)}/assess`);
+            if (!isCurrent()) return;
+            state.product = {
+                ...rated,
+                grams: p.has_nutrition ? p.grams : defaultPortion(rated),
+                mealType: state.product.mealType,
+            };
+        } catch (e) {
+            if (!isCurrent()) return;
+            state.product.aiPending = false;
+            state.product.aiError = e.message || "The AI couldn't rate this product.";
+        }
+        if (isCurrent() && !$("screen-product").hidden) renderProduct(true);
     }
 
     function factRow(e, good) {
@@ -1355,12 +1380,23 @@
             protein: { high: "Excellent protein", moderate: "Some protein" },
             fiber: { high: "Excellent fibre", moderate: "Some fibre" },
             fvl: { high: "Fruit, veg or legumes" } };
-        const title = (words[e.key] && words[e.key][e.level]) || e.label;
+        const ai = e.key === "ai";
+        const title = ai ? e.label : (words[e.key] && words[e.key][e.level]) || e.label;
+        const sub = ai ? e.detail : e.label;
         return `<div class="fact ${good ? "is-good" : ""}" data-level="${esc(e.level)}">
             <span class="fact-dot" aria-hidden="true"></span>
-            <span class="fact-name">${esc(title)}<small>${esc(e.label)}</small></span>
+            <span class="fact-name">${esc(title)}${sub ? `<small>${esc(sub)}</small>` : ""}</span>
             <span class="fact-val">${esc(value)}</span>
         </div>`;
+    }
+
+    function scoreSource(ns, p) {
+        if (ns.source === "ai") {
+            return `Nutri-Score, rated by AI${ns.confidence === "low" ? " · low confidence" : ""}`;
+        }
+        if (ns.source === "estimated") return "Nutri-Score, calculated from the label";
+        if (ns.source === "openfoodfacts") return "Nutri-Score from Open Food Facts";
+        return p.aiPending ? "Nutri-Score, rated by AI" : "Nutri-Score";
     }
 
     function productPortion(p) {
@@ -1369,8 +1405,10 @@
         return { calories: (n.calories || 0) * f, protein: (n.protein || 0) * f, carbs: (n.carbs || 0) * f, fat: (n.fat || 0) * f };
     }
 
-    function renderProduct() {
+    function renderProduct(keepScroll = false) {
         const p = state.product;
+        const scroller = $("screen-product").querySelector(".screen-body");
+        const scrollTop = keepScroll ? scroller.scrollTop : 0;
         const ns = p.nutriscore;
         const unit = p.is_beverage ? "ml" : "g";
         const grade = ns.grade;
@@ -1391,19 +1429,22 @@
                 </div>
             </div>
 
-            <section class="score-card ${grade ? "" : "is-unrated"}" aria-label="Nutri-Score">
+            <section class="score-card ${grade ? "" : "is-unrated"} ${p.aiPending ? "is-pending" : ""}" aria-label="Nutri-Score" aria-busy="${!!p.aiPending}">
                 <div class="score-top">
-                    <div class="ns-scale" role="img" aria-label="${grade ? `Nutri-Score ${grade.toUpperCase()}` : "Not rated"}">${scale}</div>
+                    <div class="ns-scale" role="img" aria-label="${grade ? `Nutri-Score ${grade.toUpperCase()}` : p.aiPending ? "Rating in progress" : "Not rated"}">${scale}</div>
                     <div class="score-text">
-                        <span class="score-label">${grade ? `${esc(ns.label)} · ${ns.rating}/5` : "Not rated"}</span>
-                        <span class="score-sub">Nutri-Score${ns.source === "estimated" ? ", estimated from the label" : ""}</span>
+                        <span class="score-label">${grade ? `${esc(ns.label)} · ${ns.rating}/5` : p.aiPending ? "Rating…" : "Not rated"}</span>
+                        <span class="score-sub">${scoreSource(ns, p)}</span>
                     </div>
                 </div>
-                <p class="score-summary">${esc(ns.summary)}</p>
+                <p class="score-summary">${p.aiPending
+                    ? "Open Food Facts has no score for this product, so the AI is rating it from the ingredients, nutrition and package photo."
+                    : esc(p.aiError || ns.summary)}</p>
+                ${!grade && !p.aiPending ? `<button class="btn btn-secondary btn-sm" data-action="product-ai-retry" style="justify-self:start">${icon("sparkle")}Rate with AI</button>` : ""}
             </section>
 
-            ${ns.negatives.length ? `<div class="facts"><h3>Watch out · per ${esc(ns.per)}</h3>${ns.negatives.map((e) => factRow(e, false)).join("")}</div>` : ""}
-            ${ns.positives.length ? `<div class="facts"><h3>Good points · per ${esc(ns.per)}</h3>${ns.positives.map((e) => factRow(e, true)).join("")}</div>` : ""}
+            ${ns.negatives.length ? `<div class="facts"><h3>Watch out${ns.source === "ai" ? "" : ` · per ${esc(ns.per)}`}</h3>${ns.negatives.map((e) => factRow(e, false)).join("")}</div>` : ""}
+            ${ns.positives.length ? `<div class="facts"><h3>Good points${ns.source === "ai" ? "" : ` · per ${esc(ns.per)}`}</h3>${ns.positives.map((e) => factRow(e, true)).join("")}</div>` : ""}
 
             ${p.nova ? `<div class="nova"><span class="nova-num" data-n="${p.nova.group}">${p.nova.group}</span>
                 <span><strong>${esc(p.nova.label)}</strong><small>NOVA processing group, from 1 (whole food) to 4</small></span></div>` : ""}
@@ -1413,6 +1454,7 @@
                 ${p.additives.length ? `<h3>Additives</h3><div class="pill-row">${p.additives.map((a) => `<span class="pill">${esc(a)}</span>`).join("")}</div>` : ""}
             </div>` : ""}
 
+            ${p.has_nutrition && p.nutrition_source === "ai" ? `<div class="tip">${icon("sparkle")}<span>Open Food Facts has no nutrition facts for this product, so these numbers are AI estimates. If you have the pack, compare them with the label.</span></div>` : ""}
             ${p.has_nutrition ? `<section class="portion-card" aria-label="How much">
                 <p class="field-row-label" style="margin:0">How much did you have?</p>
                 <div class="chips">${portions.map((o) => `<button class="chip ${Math.abs(o.g - p.grams) < 0.01 ? "is-on" : ""}" data-action="product-portion" data-g="${o.g}">${esc(o.label)}</button>`).join("")}</div>
@@ -1422,7 +1464,9 @@
                 </div>
                 <div class="portion-macros" id="product-macros"></div>
                 <div><p class="field-row-label">Meal</p>${mealTypeSeg(p.mealType, "product_meal_type")}</div>
-            </section>` : `<div class="tip">${icon("pen-line")}<span>This product has no nutrition facts in Open Food Facts yet. Add it with the numbers from the label.</span></div>`}
+            </section>` : `<div class="tip">${icon(p.aiPending ? "sparkle" : "pen-line")}<span>${p.aiPending
+                ? "No nutrition facts in Open Food Facts yet. The AI is estimating them…"
+                : "This product has no nutrition facts in Open Food Facts yet. Add it with the numbers from the label."}</span></div>`}
 
             <p class="source-note">Data from Open Food Facts, a free database anyone can improve. Barcode ${esc(p.barcode)}.</p>`;
 
@@ -1430,6 +1474,7 @@
             ? `<button class="btn btn-primary btn-block" data-action="log-product" id="product-log">Log ${fmt(n.calories)} kcal</button>`
             : '<button class="btn btn-primary btn-block" data-action="product-manual">Add from the label</button>';
 
+        scroller.scrollTop = scrollTop;
         const gramsInput = $("product-grams");
         if (gramsInput) {
             gramsInput.addEventListener("input", () => {
@@ -2015,6 +2060,7 @@
             updateProductPortion();
         },
         "log-product": () => logProduct(),
+        "product-ai-retry": () => rateWithAi(),
         "product-manual": async () => {
             const p = state.product;
             const prefill = p ? { name: p.name, weight_g: p.serving_g || "" } : {};

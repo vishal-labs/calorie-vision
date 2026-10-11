@@ -64,7 +64,7 @@ Where the build differs from the brief above, the reasons are given.
 ### Barcode scanning
 - [x] Live scanning on Android **and iPhone** (native detector, or a bundled ZXing WebAssembly reader), plus scan-from-photo and typed codes.
 - [x] Real product data from **Open Food Facts** (live, cached 7 days): name, brand, image, nutrition per 100 g and per portion.
-- [x] **Nutri-Score A–E** in the official green → light green → yellow → orange → red, shown with a rating out of 5. A plain-language reason comes with lists of what to watch out for and the good points. Uses the official grade when OFF has one, otherwise computes it with the 2023 algorithm. Also shows NOVA processing level, allergens and additives.
+- [x] **Nutri-Score A–E** in the official green → light green → yellow → orange → red, shown with a rating out of 5. A plain-language reason comes with lists of what to watch out for and the good points. Uses the official grade when OFF has one, otherwise computes it with the 2023 algorithm. If OFF has no grade and not enough nutrition data to compute one, **the AI rates it** (and estimates nutrition per 100 g so it can still be logged), clearly labelled as an AI rating. Also shows NOVA processing level, allergens and additives.
 
 ### Database & security
 - [x] Moved from localStorage to Postgres (a Docker Compose service, set up automatically on first start). Per-user rows are used instead of per-user tables, which is the standard and safer design.
@@ -75,4 +75,4 @@ Where the build differs from the brief above, the reasons are given.
 - [x] Password reset without email: a one-hour code is written to the server log for the owner to hand over (`docker compose logs app | grep "reset code"`).
 
 ### Tests
-- [x] 128 backend tests (pytest), plus a Playwright end-to-end run (`scripts/e2e.py`) covering every main flow on a phone-sized screen, including a real barcode scan through the camera.
+- [x] 136 backend tests (pytest), plus a Playwright end-to-end run (`scripts/e2e.py`) covering every main flow on a phone-sized screen, including a real barcode scan through the camera.
