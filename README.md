@@ -52,3 +52,8 @@ uv run --group dev python scripts/e2e.py http://localhost:8765   # browser end-t
 ```
 
 The end-to-end script mocks the AI call, uses real Open Food Facts lookups, and checks the WebAssembly barcode reader against a generated barcode, both as a photo and as a live camera feed.
+
+## More
+
+- [CONTRIBUTING.md](CONTRIBUTING.md): setup, tests, and the rules that keep the app working
+- [FUTURE_FEATURES.md](FUTURE_FEATURES.md): roadmap and ideas
