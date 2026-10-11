@@ -1357,6 +1357,56 @@ async def analyze_food(
     return result
 
 
+
+TEXT_SYSTEM_PROMPT = """You are a nutritional analysis assistant. The user describes, in their own words, a meal they already ate (they didn't take a photo). It may be a comma- or line-separated list, with quantities in any form: grams, ml, cups, bowls, pieces, slices, "a plate", "half", "small/large", and dishes from any cuisine (Indian, Asian, Western, etc.).
+
+Your job is to:
+1. Split the description into distinct food or drink items, keeping the user's quantity for each.
+2. For each item, estimate calories (kcal), protein (g), carbs (g), fat (g) and weight (g, or ml for drinks) for the stated quantity. If no quantity is given, assume one typical single serving.
+3. Name each item with its quantity so the user can check it, e.g. "Roti (2)", "Dal tadka (1 bowl, ~200 g)", "Paneer butter masala (100 g)".
+4. Give the whole meal a short, natural name (2-6 words).
+5. Give one short, practical suggestion (max 2 sentences) that helps the user stay within their calorie budget. Use the remaining budget if provided.
+
+Use typical home-cooked or restaurant recipes as described (e.g. "restaurant", "homemade", "with ghee" change the estimate). Ignore anything that isn't food or drink.
+
+You MUST respond with ONLY valid JSON in this exact schema — no markdown, no explanation, no code fences:
+{
+  "meal_name": "Short meal name",
+  "items": [
+    {"name": "Item (quantity)", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "weight_g": 0}
+  ],
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0},
+  "suggestions": "A short, helpful suggestion."
+}
+If the text contains no food at all, return an empty items list and say so in suggestions."""
+
+
+class AnalyzeTextRequest(BaseModel):
+    text: str = Field(..., min_length=2, max_length=1000)
+    remaining_calories: Optional[float] = Field(None, ge=-20000, le=20000)
+
+
+@app.post("/api/analyze/text", response_model=AnalyzeResponse)
+async def analyze_text(
+    request: AnalyzeTextRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Estimate a meal from a typed description (for meals that weren't photographed)."""
+    text = request.text.strip()
+    if len(text) < 2:
+        raise HTTPException(status_code=422, detail="Describe what you ate, e.g. \"2 rotis, 1 bowl dal\".")
+    parts = [f"What I ate: {text}"]
+    if request.remaining_calories is not None:
+        parts.append(f"Remaining calorie budget for the day before this meal: {round(request.remaining_calories)} kcal")
+    try:
+        content = await call_llm(TEXT_SYSTEM_PROMPT, [{"type": "text", "text": "\n".join(parts)}], max_tokens=1500)
+        return normalize_analysis(extract_json(content))
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Failed to parse the AI response ({type(e).__name__}). Try rephrasing the meal.",
+        )
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

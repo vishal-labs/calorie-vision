@@ -102,6 +102,18 @@ MOCK_ANALYSIS = {
 }
 
 
+MOCK_TEXT_ANALYSIS = {
+    "meal_name": "Dal roti dinner",
+    "items": [
+        {"name": "Roti (2)", "calories": 240, "protein": 8, "carbs": 44, "fat": 4, "weight_g": 80},
+        {"name": "Dal tadka (1 bowl, ~200 g)", "calories": 180, "protein": 9, "carbs": 24, "fat": 6, "weight_g": 200},
+        {"name": "Paneer butter masala (100 g)", "calories": 280, "protein": 12, "carbs": 9, "fat": 22, "weight_g": 100},
+    ],
+    "total": {"calories": 700, "protein": 29, "carbs": 77, "fat": 32},
+    "suggestions": "Swapping the paneer curry for a second bowl of dal would save about 100 kcal.",
+}
+
+
 def wait_until(page, js, timeout=8.0):
     # wait_for_function evals a string, which the app's CSP (correctly) forbids.
     end = time.time() + timeout
@@ -137,6 +149,8 @@ def main():
         page = ctx.new_page()
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
+        page.route("**/api/analyze/text", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(MOCK_TEXT_ANALYSIS)))
         page.route("**/api/analyze", lambda route: route.fulfill(
             status=200, content_type="application/json", body=json.dumps(MOCK_ANALYSIS)))
 
@@ -161,7 +175,8 @@ def main():
         page.click(".tabbar-fab")
         expect(page.locator(".sheet")).to_be_visible()
         shot(page, "03-add-sheet")
-        page.click('.sheet [data-action="quick-add"]')
+        page.click('.sheet [data-action="describe"]')
+        page.click('.sheet [data-role="manual"]')  # "Enter them yourself"
         page.fill('.sheet input[name="name"]', "Greek yogurt")
         page.fill('.sheet input[name="calories"]', "150")
         page.fill('.sheet input[name="protein"]', "17")
@@ -246,6 +261,26 @@ def main():
         page.click('[data-action="day-prev"]')
         expect(page.locator("#day-label")).to_have_text("Yesterday")
         shot(page, "11-yesterday")
+
+        # Forgot to photograph a meal yesterday: type it, AI fills the macros
+        page.click('.empty-day [data-action="describe"]')
+        expect(page.locator(".sheet-title")).to_have_text("What did you eat? · Yesterday")
+        page.click('.sheet [data-role="go"]')
+        expect(page.locator('.sheet [data-role="error"]')).to_be_visible()
+        page.fill(".sheet .describe-input", "2 rotis, 1 bowl dal, 100 g paneer butter masala")
+        shot(page, "11b-describe")
+        page.click('.sheet [data-role="go"]')
+        expect(page.locator("#screen-results")).to_be_visible()
+        expect(page.locator(".described")).to_contain_text("2 rotis, 1 bowl dal")
+        expect(page.locator("#results-log")).to_have_text("Log 700 kcal")
+        page.click('[data-action="result-portion"][data-index="2"][data-step="-0.25"]')
+        expect(page.locator("#results-log")).to_have_text("Log 630 kcal")
+        expect(page.locator("#screen-results .budget-after")).to_contain_text("left yesterday")
+        shot(page, "11c-describe-results")
+        page.click("#results-log")
+        expect(page.locator("#day-label")).to_have_text("Yesterday")
+        expect(page.locator(".meal-row-name", has_text="Dal roti dinner")).to_be_visible()
+        expect(page.locator("#hero-value")).to_have_text("1,370")
         page.click('[data-action="day-today"]')
 
         # Progress

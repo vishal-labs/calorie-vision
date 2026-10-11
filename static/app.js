@@ -78,6 +78,7 @@
         foodsQuery: "",
         addMealType: null,
         photo: null,
+        describeDraft: "",
         analysis: null,
         product: null,
     };
@@ -572,6 +573,7 @@
                     <div class="empty-actions">
                         <button class="btn btn-primary btn-sm" data-action="open-camera">${icon("camera")}Snap a meal</button>
                         <button class="btn btn-secondary btn-sm" data-action="open-scanner">${icon("barcode")}Scan barcode</button>
+                        <button class="btn btn-secondary btn-sm" data-action="describe">${icon("pen-line")}Type it in</button>
                     </div>
                 </div>`;
             return;
@@ -638,7 +640,7 @@
                     </button>
                     <button class="add-tile" data-action="open-scanner">${icon("barcode")}<span><strong>Scan barcode</strong><small>Packaged food, rated A–E</small></span></button>
                     <button class="add-tile" data-action="pick-photo">${icon("image")}<span><strong>Photo library</strong><small>Estimate from a saved photo</small></span></button>
-                    <button class="add-tile" data-action="quick-add">${icon("pen-line")}<span><strong>Quick add</strong><small>Type in calories and macros</small></span></button>
+                    <button class="add-tile" data-action="describe">${icon("pen-line")}<span><strong>Type it in</strong><small>Say what you ate, AI fills the macros</small></span></button>
                     <button class="add-tile" data-action="tab-foods">${icon("bowl")}<span><strong>My foods</strong><small>Saved and recent foods</small></span></button>
                 </div>
                 <div id="add-recent"></div>`,
@@ -741,6 +743,90 @@
         }
         out.save_preset = fd.get("save_preset") === "on";
         return out;
+    }
+
+    // ── Type what you ate → AI estimate ──
+    function openDescribe({ replace = false, fromResults = false } = {}) {
+        let ctl = null;
+        let timer = null;
+        const when = state.date === todayIso() ? "" : ` · ${dayLabel(state.date)}`;
+        openSheet({
+            replace,
+            title: `What did you eat?${when}`,
+            body: `
+                <label class="field">
+                    <span class="field-label">List each item and how much you had</span>
+                    <textarea class="input textarea describe-input" data-role="text" rows="4" maxlength="1000" autofocus
+                        placeholder="e.g. 2 rotis, 1 bowl dal, 100 g paneer butter masala, small glass of sweet lassi">${esc(state.describeDraft)}</textarea>
+                </label>
+                <p class="muted small" style="margin:-6px 0 0">Grams, cups, bowls, pieces or “a plate” all work. Mention “homemade”, “restaurant” or “with ghee” if it matters.</p>
+                <p class="describe-status" data-role="status" aria-live="polite" hidden></p>
+                <p class="form-error" data-role="error" hidden></p>
+                ${fromResults ? "" : '<button class="btn-text" data-role="manual" style="justify-self:start">Know the exact numbers? Enter them yourself</button>'}`,
+            foot: `<button class="btn btn-primary btn-block" data-role="go">${icon("sparkle")}Estimate macros</button>`,
+            onClose: () => { if (ctl) ctl.abort(); clearInterval(timer); },
+            onMount(el) {
+                const box = el.querySelector('[data-role="text"]');
+                const go = el.querySelector('[data-role="go"]');
+                const status = el.querySelector('[data-role="status"]');
+                const err = el.querySelector('[data-role="error"]');
+                box.addEventListener("input", () => { state.describeDraft = box.value; err.hidden = true; });
+                box.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) go.click(); });
+                const manual = el.querySelector('[data-role="manual"]');
+                if (manual) manual.addEventListener("click", () => openQuickAdd({}, { replace: true }));
+
+                go.addEventListener("click", async () => {
+                    const text = box.value.trim();
+                    if (text.length < 2) { err.textContent = "Type what you ate first, e.g. “2 rotis, 1 bowl dal”."; err.hidden = false; box.focus(); return; }
+                    err.hidden = true;
+                    setBusy(go, true);
+                    box.disabled = true;
+                    const msgs = ["Reading your meal…", "Estimating portions…", "Working out the macros…", "Nearly done…"];
+                    let i = 0;
+                    status.textContent = msgs[0];
+                    status.hidden = false;
+                    timer = setInterval(() => { i = Math.min(i + 1, msgs.length - 1); status.textContent = msgs[i]; }, 2200);
+                    const remaining = state.goals && state.day ? state.goals.calories - state.day.total_calories : null;
+                    ctl = new AbortController();
+                    try {
+                        const res = await post("/api/analyze/text", { text, remaining_calories: remaining }, { signal: ctl.signal });
+                        ctl = null;
+                        clearInterval(timer);
+                        if (!res.items.length) {
+                            err.textContent = res.suggestions || "No food found in that. Try listing the items you ate.";
+                            err.hidden = false;
+                            status.hidden = true;
+                            setBusy(go, false);
+                            box.disabled = false;
+                            return;
+                        }
+                        state.photo = null;
+                        state.analysis = {
+                            name: res.meal_name || (res.items.length === 1 ? res.items[0].name : ""),
+                            suggestion: res.suggestions,
+                            mealType: (state.analysis && fromResults && state.analysis.mealType) || currentMealType(),
+                            description: text,
+                            items: res.items.map((it) => ({ ...it, factor: 1 })),
+                        };
+                        if (fromResults) {
+                            await back();
+                            renderResults();
+                        } else {
+                            openResults();
+                        }
+                    } catch (e) {
+                        clearInterval(timer);
+                        if (e.name === "AbortError") return;
+                        ctl = null;
+                        status.hidden = true;
+                        err.textContent = e.message || "The estimate failed. Try again.";
+                        err.hidden = false;
+                        setBusy(go, false);
+                        box.disabled = false;
+                    }
+                });
+            },
+        });
     }
 
     function openQuickAdd(prefill = {}, { replace = false, source = "manual" } = {}) {
@@ -1098,6 +1184,7 @@
                 name: res.meal_name || (res.items.length === 1 ? res.items[0].name : ""),
                 suggestion: res.suggestions,
                 mealType: currentMealType(),
+                description: null,
                 items: res.items.map((it) => ({ ...it, factor: 1 })),
             };
             openResults();
@@ -1129,17 +1216,20 @@
         let after = "";
         if (state.goals && state.day) {
             const left = state.goals.calories - state.day.total_calories - total.calories;
-            const when = state.date === todayIso() ? "today" : `on ${dayLabel(state.date)}`;
+            const label = dayLabel(state.date);
+            const when = label === "Today" || label === "Yesterday" ? label.toLowerCase() : `on ${label}`;
             after = left >= 0
                 ? `<p class="budget-after">After this you'll have <strong>${fmt(left)} kcal</strong> left ${esc(when)}.</p>`
                 : `<p class="budget-after is-over">This puts you <strong>${fmt(-left)} kcal</strong> over budget ${esc(when)}.</p>`;
         }
         $("results-body").innerHTML = `
             <div class="results-hero">
-                <img class="results-thumb" src="${state.photo}" alt="">
+                ${state.photo ? `<img class="results-thumb" src="${state.photo}" alt="">` : ""}
                 <label class="results-name"><span class="field-label">Meal name</span>
                     <input class="input" id="results-name" maxlength="200" value="${esc(a.name)}" placeholder="Name this meal"></label>
             </div>
+            ${a.description ? `<div class="described"><span>“${esc(a.description)}”</span>
+                <button class="btn-text" data-action="describe-edit">Edit</button></div>` : ""}
             <div>
                 <div class="results-total"><span class="big-num">${fmt(total.calories)}</span><span class="hero-caption">kcal</span></div>
                 ${detailMacros(total)}
@@ -1210,6 +1300,7 @@
             const items = a.items.map((it) => ({ ...scaledItem(it), source: "ai" }));
             const mealType = chipValue($("screen-results"), "result_meal_type") || a.mealType;
             const notify = await logMeals(items, { groupName: a.name.trim() || null, mealType, deferToast: true });
+            if (state.analysis.description) state.describeDraft = "";
             state.analysis = null;
             await closeAll();
             notify();
@@ -2015,6 +2106,8 @@
         "open-add": (el) => openAddSheet(el.dataset.mealType),
         "open-meal": (el) => openMealSheet(el.dataset.key),
         "quick-add": () => openQuickAdd({}, { replace: true }),
+        describe: () => openDescribe({ replace: !!topLayer() && topLayer().name === "sheet" }),
+        "describe-edit": () => openDescribe({ fromResults: true }),
         "relog-recent": async (el) => { const f = state.recent[Number(el.dataset.index)]; await back(); relogRecent(f, state.addMealType); },
 
         "open-camera": () => openCamera(),

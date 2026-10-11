@@ -254,3 +254,45 @@ class TestAnalysisNormalization:
 
     def test_fenced_json(self):
         assert main.extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+
+
+class TestAnalyzeText:
+    async def test_estimates_from_description(self, client: AsyncClient, db_session, monkeypatch):
+        sent = []
+
+        async def fake_llm(system_prompt, user_content, **kw):
+            sent.append(user_content[0]["text"])
+            return json.dumps({
+                "meal_name": "Dal roti",
+                "items": [
+                    {"name": "Roti (2)", "calories": 240, "protein": 8, "carbs": 44, "fat": 4, "weight_g": 80},
+                    {"name": "Dal tadka (1 bowl)", "calories": "180 kcal", "protein": 9, "carbs": 24, "fat": 6, "weight_g": 200},
+                ],
+                "total": {"calories": 1},
+                "suggestions": "Add a salad.",
+            })
+
+        monkeypatch.setattr(main, "call_llm", fake_llm)
+        headers = auth_headers(await create_test_user(db_session))
+        res = await client.post("/api/analyze/text", headers=headers,
+                                json={"text": "2 rotis, 1 bowl dal", "remaining_calories": 900})
+        assert res.status_code == 200
+        body = res.json()
+        assert body["meal_name"] == "Dal roti"
+        assert body["total"]["calories"] == 420  # recomputed from items
+        assert "2 rotis, 1 bowl dal" in sent[0] and "900 kcal" in sent[0]
+
+    async def test_validation_and_auth(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        assert (await client.post("/api/analyze/text", headers=headers, json={"text": ""})).status_code == 422
+        assert (await client.post("/api/analyze/text", headers=headers, json={"text": "x" * 1001})).status_code == 422
+        assert (await client.post("/api/analyze/text", json={"text": "2 rotis"})).status_code in (401, 403)
+
+    async def test_unparseable_ai_reply(self, client: AsyncClient, db_session, monkeypatch):
+        async def fake_llm(*a, **kw):
+            return "Sounds tasty!"
+
+        monkeypatch.setattr(main, "call_llm", fake_llm)
+        headers = auth_headers(await create_test_user(db_session))
+        res = await client.post("/api/analyze/text", headers=headers, json={"text": "2 rotis"})
+        assert res.status_code == 502
