@@ -31,6 +31,14 @@ def session_factory(engine):
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    from auth import login_limiter, reset_limiter
+    login_limiter._hits.clear()
+    reset_limiter._hits.clear()
+    yield
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db(engine):
     async with engine.begin() as conn:

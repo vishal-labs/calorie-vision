@@ -8,8 +8,18 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from fastapi.testclient import TestClient
 
 from main import app
+from auth import get_current_user
+from models import User
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def fake_user():
+    """/api/analyze requires a signed-in user; these tests don't need a database."""
+    app.dependency_overrides[get_current_user] = lambda: User(id=1, username="tester", password_hash="x")
+    yield
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 # ──────────────────────────────────────────
@@ -22,6 +32,23 @@ class TestIndex:
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
         assert "Calorie Vision" in response.text
+        assert "__V__" not in response.text  # asset version is substituted
+
+    def test_security_headers(self):
+        response = client.get("/")
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+
+class TestAnalyzeAuth:
+    def test_requires_auth(self):
+        app.dependency_overrides.pop(get_current_user, None)
+        response = client.post("/api/analyze", json={"image": "dGVzdA=="})
+        assert response.status_code in (401, 403)
+
+    def test_rejects_oversized_image(self):
+        response = client.post("/api/analyze", json={"image": "A" * 8_000_001})
+        assert response.status_code == 422
 
 
 # ──────────────────────────────────────────

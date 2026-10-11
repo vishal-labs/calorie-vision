@@ -9,6 +9,17 @@ from auth import hash_password, generate_reset_token, verify_reset_token
 from tests.conftest import create_test_user
 
 
+async def stored_reset_token(db_session, reset_response) -> str:
+    """The reset code only lives in the DB (and server log), never in the response."""
+    assert reset_response.status_code == 200
+    db_session.expire_all()
+    username = reset_response.request.content and __import__("json").loads(reset_response.request.content)["username"]
+    result = await db_session.execute(select(User).where(User.username == username))
+    token = result.scalar_one().reset_token
+    db_session.expunge_all()  # later assertions must see fresh rows
+    return token
+
+
 class TestResetPassword:
     """Tests for the password reset flow."""
 
@@ -26,8 +37,9 @@ class TestResetPassword:
 
         assert response.status_code == 200
         data = response.json()
-        assert "reset_token" in data
         assert "message" in data
+        # The code must never be returned to the caller (account takeover)
+        assert "reset_token" not in data
 
         # Verify token was stored in database
         result = await db_session.execute(select(User).where(User.username == "resetuser"))
@@ -45,8 +57,9 @@ class TestResetPassword:
 
         assert response.status_code == 200
         data = response.json()
-        # Should return empty token to prevent username enumeration
-        assert data["reset_token"] == ""
+        # Same response as for a real user, to prevent username enumeration
+        assert "reset_token" not in data
+        assert data["message"].startswith("If that account exists")
 
     @pytest.mark.asyncio
     async def test_reset_password_with_valid_token(self, client, db_session):
@@ -59,7 +72,7 @@ class TestResetPassword:
             "/api/auth/forgot-password",
             json={"username": "validtoken"}
         )
-        reset_token = reset_response.json()["reset_token"]
+        reset_token = await stored_reset_token(db_session, reset_response)
 
         # Reset password
         response = await client.post(
@@ -116,7 +129,7 @@ class TestResetPassword:
             "/api/auth/forgot-password",
             json={"username": "expiredtoken"}
         )
-        reset_token = reset_response.json()["reset_token"]
+        reset_token = await stored_reset_token(db_session, reset_response)
 
         # Now manually update the expiry to be in the past (bypass the endpoint to set expired)
         result = await db_session.execute(select(User).where(User.username == "expiredtoken"))
@@ -148,7 +161,7 @@ class TestResetPassword:
             "/api/auth/forgot-password",
             json={"username": "correctuser"}
         )
-        reset_token = reset_response.json()["reset_token"]
+        reset_token = await stored_reset_token(db_session, reset_response)
 
         # Try with different username
         response = await client.post(

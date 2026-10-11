@@ -278,8 +278,8 @@ class TestIndex:
 
     async def test_login_view_has_password_fields(self, client: AsyncClient):
         res = await client.get("/")
-        assert 'id="login-username"' in res.text
-        assert 'id="login-password"' in res.text
-        assert 'id="btn-login"' in res.text
-        assert 'id="btn-register"' in res.text
-        assert 'id="change-password-section"' in res.text
+        assert 'id="auth-username"' in res.text
+        assert 'id="auth-password"' in res.text
+        assert 'data-mode="login"' in res.text
+        assert 'data-mode="register"' in res.text
+        assert 'id="change-form"' in res.text

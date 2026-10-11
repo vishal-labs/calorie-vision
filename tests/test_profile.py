@@ -99,39 +99,30 @@ class TestBMI:
 
 
 class TestUI:
-    def test_home_button_in_html(self):
-        from main import app
-        from fastapi.testclient import TestClient
-        tc = TestClient(app)
-        res = tc.get("/")
-        assert 'id="btn-home"' in res.text
-        assert 'id="btn-logout"' in res.text
-        assert 'id="profile-preview"' in res.text
-        assert 'id="tdee-result"' in res.text
-        assert 'id="profile-height"' in res.text
-        assert 'id="profile-weight"' in res.text
-        assert 'id="profile-age"' in res.text
-        assert 'id="profile-gender"' in res.text
-        assert 'id="profile-activity"' in res.text
-        assert 'id="profile-goal"' in res.text
-        assert 'goal-btn' in res.text
+    """Static shell checks; behaviour is covered by scripts/e2e.py in a real browser."""
 
-    def test_bmi_tdee_js_functions(self):
+    def test_shell_has_tabs_and_flows(self):
+        from main import app
+        from fastapi.testclient import TestClient
+        res = TestClient(app).get("/")
+        for tab in ("today", "progress", "foods", "me"):
+            assert f'id="tab-{tab}"' in res.text
+        for screen in ("camera", "review", "analyzing", "results", "scanner", "product"):
+            assert f'id="screen-{screen}"' in res.text
+        assert 'rel="manifest"' in res.text
+
+    def test_assets_are_served_with_version(self):
         from main import app
         from fastapi.testclient import TestClient
         tc = TestClient(app)
-        res = tc.get("/")
-        js_path = None
-        for line in res.text.split("\n"):
-            if "script src=" in line and "app.js" in line:
-                js_path = line.split('src="')[1].split('"')[0].split("?")[0]
-                break
-        assert js_path is not None
-        js_res = tc.get(js_path)
-        assert js_res.status_code == 200
-        js = js_res.text
-        assert "recalcTDEE" in js
-        assert "renderProfilePreview" in js
-        assert "handleLogout" in js
-        assert "loadGoals" in js
-        assert "loadProfile" in js
+        html = tc.get("/").text
+        for name in ("app.js", "scanner.js", "style.css"):
+            marker = f"/static/{name}?v="
+            assert marker in html
+            assert tc.get(f"/static/{name}").status_code == 200
+        js = tc.get("/static/app.js").text
+        for fn in ("renderToday", "openScanner", "openGroupSheet", "renderProgress", "loadGoals"):
+            assert fn in js
+        wasm = tc.get("/static/vendor/zxing_reader-3.1.3.wasm")
+        assert wasm.status_code == 200
+        assert wasm.headers["content-type"] == "application/wasm"

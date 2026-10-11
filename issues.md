@@ -1,1 +1,5 @@
-1. The Complex mean is working, but there is no way that i can modify, remove the existing calorie count of individual items in that list. But i need to do so. 
+# Issues
+
+_All open issues are resolved. Add new ones below._
+
+- ~~Grouped (multi-item) meals can't have individual items edited or removed.~~ Fixed: tap a grouped meal, then tap any item to change it, or use its trash icon to remove just that item.

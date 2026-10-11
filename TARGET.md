@@ -48,3 +48,31 @@ Along with the classification, also give a small description of why the product 
 9. Split the entire section into smaller problems, while having a solid plan and tests at every step to check the integrity of the features that are new and existing. 
 
 Finally, Update the Frontend with the required changes that's suitable for mobile view. do a little bit of polishing for the existing UI while keeping the entire UX more user friendly. 
+
+---
+
+## Implementation status (updated 2026-10-11)
+
+Where the build differs from the brief above, the reasons are given.
+
+### Core flow
+- [x] Camera preview → capture → optional description → AI breakdown per item (calories, protein, carbs, fat, weight) → total → suggestion → **Log** (the "Consume" step). You can adjust portions, fix or remove items, and add missing ones before logging. Every item stays editable afterwards.
+- [x] Model is configurable with `LLM_MODEL` (default `google/gemma-4-31b-it`); the key comes from `OPENROUTER_API_KEY` in `.env`. The model is told your remaining budget, so its suggestion is concrete.
+- [x] Daily limit, set and changed in the **You** tab, with a suggested target from height/weight/age/activity/goal. Today shows calories left, or a clear over-budget state.
+- [x] Dark, minimal, mobile-first UI with constant feedback: loading states, toasts with Undo, haptics. Extras: water tracking, meal types, earlier days, Progress charts, My foods.
+
+### Barcode scanning
+- [x] Live scanning on Android **and iPhone** (native detector, or a bundled ZXing WebAssembly reader), plus scan-from-photo and typed codes.
+- [x] Real product data from **Open Food Facts** (live, cached 7 days): name, brand, image, nutrition per 100 g and per portion.
+- [x] **Nutri-Score A–E** in the official green → light green → yellow → orange → red, shown with a rating out of 5. A plain-language reason comes with lists of what to watch out for and the good points. Uses the official grade when OFF has one, otherwise computes it with the 2023 algorithm. Also shows NOVA processing level, allergens and additives.
+
+### Database & security
+- [x] Moved from localStorage to Postgres (a Docker Compose service, set up automatically on first start). Per-user rows are used instead of per-user tables, which is the standard and safer design.
+- [x] Signup/login with bcrypt and JWT; every data endpoint is scoped to the signed-in user.
+- [x] SQL injection: ORM-only queries. CSRF: not applicable (bearer tokens, no cookies). Plus a strict Content-Security-Policy, security headers, rate-limited login/reset, input validation with sane bounds, and a session secret that isn't guessable.
+- [x] RESTful endpoints; schema changes migrate in place without losing data.
+- [ ] Shared default password `pass` for all accounts: **intentionally not done**. A known shared password is a security hole; people create their own account instead. Accounts flagged `must_change_password` are still forced to change it at sign-in.
+- [x] Password reset without email: a one-hour code is written to the server log for the owner to hand over (`docker compose logs app | grep "reset code"`).
+
+### Tests
+- [x] 128 backend tests (pytest), plus a Playwright end-to-end run (`scripts/e2e.py`) covering every main flow on a phone-sized screen, including a real barcode scan through the camera.

@@ -1,60 +1,76 @@
 """
 Calorie Vision — FastAPI Backend
-Analyzes food images via OpenRouter (Gemma-4), manages users, meals, presets, and budgets.
+Analyzes food images via OpenRouter, looks up packaged food by barcode via
+Open Food Facts, and manages users, meals, presets, budgets and water.
 """
 import os
+import re
 import json
 import asyncio
+import hashlib
+import hmac
+import logging
 import datetime
+import uuid
 import httpx
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal, Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
-from typing import Optional
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, delete
-import uuid
+from sqlalchemy import select, delete
 
-from database import get_db, init_db, engine, Base
-from models import User, Meal, Preset, Budget, UserProfile
+from database import DB, init_db, async_session
+from models import User, Meal, Preset, Budget, UserProfile, WaterLog
 from schemas import (
     RegisterRequest, LoginRequest, ChangePasswordRequest, AuthResponse,
-    MealCreate, MealResponse, MealListResponse,
-    PresetCreate, PresetResponse,
+    MealCreate, MealBatchCreate, MealUpdate, MealGroupUpdate, MealResponse, MealListResponse,
+    RecentFood, PresetCreate, PresetResponse,
     BudgetResponse, BudgetUpdate, HistoryResponse, HistoryDay,
     ProfileUpdate, ProfileResponse, GoalSummary,
-    ForgotPasswordRequest, ResetPasswordRequest,
+    ForgotPasswordRequest, ResetPasswordRequest, WaterUpdate, WaterResponse,
 )
 from auth import (
-    hash_password, verify_password, create_token,
+    hash_password, verify_password, create_token, load_jwt_secret,
     get_current_user, generate_reset_token, verify_reset_token,
+    login_limiter, reset_limiter,
 )
+import food_facts
 
 load_dotenv()
 
-LLM_MODEL = "google/gemma-4-31b-it"
+logger = logging.getLogger("calorievision")
+logging.basicConfig(level=logging.INFO)
 
-
-def meal_breakdown_item(meal: Meal) -> dict:
-    """Serialize a persisted meal as a grouped-meal nutrition breakdown item."""
-    return {
-        "id": meal.id,
-        "name": meal.name,
-        "calories": meal.calories,
-        "protein": meal.protein,
-        "carbs": meal.carbs,
-        "fat": meal.fat,
-        "weight_g": meal.weight_g,
-    }
+LLM_MODEL = os.getenv("LLM_MODEL", "google/gemma-4-31b-it")
+DEFAULT_BUDGET = 2000
+MEAL_TYPES = ("breakfast", "lunch", "dinner", "snack")
 
 
 # ══════════════════════════════════════════════
 # Helper Functions
 # ══════════════════════════════════════════════
+
+ACTIVITY_MULTIPLIERS = {
+    "sedentary": 1.2,
+    "light": 1.375,
+    "moderate": 1.55,
+    "active": 1.725,
+    "very_active": 1.9,
+}
+GOAL_MODIFIERS = {"lose": 0.8, "maintain": 1.0, "gain": 1.15}
+
+
+def calculate_bmr(weight_kg, height_cm, age, gender) -> Optional[float]:
+    """Mifflin-St Jeor."""
+    if None in (weight_kg, height_cm, age, gender):
+        return None
+    base = (10 * weight_kg) + (6.25 * height_cm) - (5 * age)
+    return base + 5 if gender == "male" else base - 161
 
 
 def calculate_bmi_tdee(
@@ -66,52 +82,36 @@ def calculate_bmi_tdee(
     goal: Optional[str],
 ) -> tuple[Optional[float], Optional[float]]:
     """
-    Calculate BMI and TDEE based on profile fields.
-    Returns (bmi, tdee) tuple.
+    Returns (bmi, goal-adjusted daily target). The second value is stored as
+    `UserProfile.tdee` for backwards compatibility.
     """
     bmi = None
     tdee = None
 
-    # Calculate BMI if height and weight are both available
     if height_cm is not None and weight_kg is not None and height_cm > 0:
         height_m = height_cm / 100.0
         bmi = round(weight_kg / (height_m ** 2), 1)
 
-    # Calculate TDEE if all required fields are set
-    if (
-        age is not None
-        and gender is not None
-        and weight_kg is not None
-        and height_cm is not None
-        and activity_level is not None
-    ):
-        # BMR: Mifflin-St Jeor equation
-        if gender == "male":
-            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) + 5
-        else:  # female
-            bmr = (10 * weight_kg) + (6.25 * height_cm) - (5 * age) - 161
-
-        # Activity multiplier
-        activity_multipliers = {
-            "sedentary": 1.2,
-            "light": 1.375,
-            "moderate": 1.55,
-            "active": 1.725,
-            "very_active": 1.9,
-        }
-        multiplier = activity_multipliers.get(activity_level, 1.55)
-        tdee = bmr * multiplier
-
-        # Goal modifier
-        goal_modifiers = {
-            "lose": 0.8,
-            "maintain": 1.0,
-            "gain": 1.15,
-        }
-        goal_modifier = goal_modifiers.get(goal, 1.0) if goal else 1.0
-        tdee = tdee * goal_modifier
+    bmr = calculate_bmr(weight_kg, height_cm, age, gender)
+    if bmr is not None and activity_level is not None:
+        tdee = bmr * ACTIVITY_MULTIPLIERS.get(activity_level, 1.55)
+        tdee *= GOAL_MODIFIERS.get(goal, 1.0) if goal else 1.0
 
     return bmi, tdee
+
+
+def macro_targets(calories: int, weight_kg: Optional[float], goal: Optional[str]) -> tuple[int, int, int]:
+    """Protein by bodyweight when known (capped at 35% of calories), fat 27%, carbs the rest."""
+    if weight_kg:
+        per_kg = {"lose": 2.0, "gain": 1.8}.get(goal or "", 1.6)
+        protein = min(weight_kg * per_kg, calories * 0.35 / 4)
+    else:
+        protein = calories * 0.30 / 4
+    fat = calories * 0.27 / 9
+    carbs = max(0.0, (calories - protein * 4 - fat * 9) / 4)
+    return round(protein), round(carbs), round(fat)
+
+
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1
 
@@ -121,13 +121,14 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 SYSTEM_PROMPT = """You are a nutritional analysis assistant. You will receive an image of a food item or meal, and optionally a text description from the user.
 
 Your job is to:
-1. Identify every distinct food item visible in the image.
+1. Identify every distinct food item visible in the image. Use the user's description to correct what you see (dish names, portion sizes, cooking oil, hidden ingredients).
 2. For each item, estimate: calories (kcal), protein (g), carbs (g), fat (g), and approximate weight (g).
-3. Provide a total summary across all items.
-4. Give a short, practical suggestion to help the user stay within their calorie budget.
+3. Give the whole meal a short, natural name (2-6 words), e.g. "Chicken biryani with raita".
+4. Give one short, practical suggestion (max 2 sentences) that helps the user stay within their calorie budget, e.g. "If you skip X, you'd have room for Y later." Use the remaining budget if provided.
 
 You MUST respond with ONLY valid JSON in this exact schema — no markdown, no explanation, no code fences:
 {
+  "meal_name": "Short meal name",
   "items": [
     {
       "name": "Item Name",
@@ -147,45 +148,72 @@ You MUST respond with ONLY valid JSON in this exact schema — no markdown, no e
   "suggestions": "A short, helpful suggestion."
 }
 
-Be realistic with estimates. If unsure, give a reasonable mid-range estimate. Always respond with valid JSON only."""
+Be realistic with estimates. If unsure, give a reasonable mid-range estimate. If the image contains no food, return an empty items list and explain in suggestions. Always respond with valid JSON only."""
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    async with async_session() as session:
+        await load_jwt_secret(session)
     yield
 
 
-app = FastAPI(title="Calorie Vision", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Calorie Vision", version="0.3.0", lifespan=lifespan)
 
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-
-class AnalyzeRequest(BaseModel):
-    image: str
-    description: Optional[str] = None
-
-
-class FoodItem(BaseModel):
-    name: str
-    calories: float
-    protein: float
-    carbs: float
-    fat: float
-    weight_g: float
-
-
-class AnalyzeResponse(BaseModel):
-    items: list[FoodItem]
-    total: dict
-    suggestions: str
+CSP = "; ".join([
+    "default-src 'self'",
+    # wasm-unsafe-eval: the ZXing barcode decoder is WebAssembly
+    "script-src 'self' 'wasm-unsafe-eval'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: blob: https://images.openfoodfacts.org https://static.openfoodfacts.org",
+    "media-src 'self' blob:",
+    "connect-src 'self'",
+    "worker-src 'self' blob:",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+])
 
 
-@app.get("/")
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", CSP)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+def asset_version() -> str:
+    """Cache-busting version derived from the static assets, so it never needs a manual bump."""
+    h = hashlib.sha1()
+    for name in ("app.js", "style.css", "scanner.js"):
+        f = static_dir / name
+        if f.exists():
+            st = f.stat()
+            h.update(f"{name}:{st.st_mtime_ns}:{st.st_size}".encode())
+    return h.hexdigest()[:10]
+
+
+@app.get("/", response_class=HTMLResponse)
 async def serve_index():
-    return FileResponse(str(static_dir / "index.html"))
+    html = (static_dir / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("__V__", asset_version()), headers={"Cache-Control": "no-cache"})
+
+
+def client_key(request: Request, username: str) -> str:
+    ip = request.client.host if request.client else "?"
+    return f"{ip}:{username.strip().lower()}"
 
 
 # ══════════════════════════════════════════════
@@ -193,21 +221,21 @@ async def serve_index():
 # ══════════════════════════════════════════════
 
 @app.post("/api/auth/register", response_model=AuthResponse)
-async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    existing = await db.execute(select(User).where(User.username == req.username.strip()))
+async def register(req: RegisterRequest, db: AsyncSession = DB):
+    username = req.username.strip()
+    existing = await db.execute(select(User).where(User.username == username))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="Username already exists")
+        raise HTTPException(status_code=409, detail="That username is taken. Pick another or sign in.")
 
     user = User(
-        username=req.username.strip(),
+        username=username,
         password_hash=hash_password(req.password),
         must_change_password=False,
     )
     db.add(user)
     await db.flush()
 
-    budget = Budget(user_id=user.id, daily_calories=2000)
-    db.add(budget)
+    db.add(Budget(user_id=user.id, daily_calories=DEFAULT_BUDGET))
     await db.flush()
 
     token = create_token(user.id, user.username)
@@ -215,13 +243,17 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
 
 @app.post("/api/auth/login", response_model=AuthResponse)
-async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
+async def login(req: LoginRequest, request: Request, db: AsyncSession = DB):
+    key = client_key(request, req.username)
+    login_limiter.check(key)
     result = await db.execute(select(User).where(User.username == req.username.strip()))
     user = result.scalar_one_or_none()
 
     if not user or not verify_password(req.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        login_limiter.hit(key)
+        raise HTTPException(status_code=401, detail="Wrong username or password")
 
+    login_limiter.reset(key)
     token = create_token(user.id, user.username)
     return AuthResponse(
         token=token,
@@ -230,11 +262,16 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
     )
 
 
+@app.get("/api/auth/me")
+async def me(current_user: User = Depends(get_current_user)):
+    return {"username": current_user.username, "must_change_password": current_user.must_change_password}
+
+
 @app.put("/api/auth/change-password")
 async def change_password(
     req: ChangePasswordRequest,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     if not verify_password(req.old_password, current_user.password_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
@@ -248,67 +285,162 @@ async def change_password(
 @app.post("/api/auth/forgot-password")
 async def forgot_password(
     req: ForgotPasswordRequest,
-    db: AsyncSession = Depends(get_db),
+    request: Request,
+    db: AsyncSession = DB,
 ):
-    """Request a password reset token for a user."""
+    """Create a reset code. There's no email, so the code goes to the server log
+    for the app owner to hand over; it's never returned to the caller."""
+    key = client_key(request, req.username)
+    reset_limiter.check(key)
+    reset_limiter.hit(key)
     result = await db.execute(select(User).where(User.username == req.username.strip()))
     user = result.scalar_one_or_none()
 
-    # Always return success to prevent username enumeration
+    message = "If that account exists, a reset code was created. Ask the app owner for it."
     if not user:
-        return {"reset_token": "", "message": "If the username exists, a reset token has been sent"}
+        return {"message": message}
 
-    # Generate reset token with 1-hour expiry
-    reset_token = generate_reset_token()
-    reset_expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
-
-    user.reset_token = reset_token
-    user.reset_expiry = reset_expiry
+    user.reset_token = generate_reset_token()
+    user.reset_expiry = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
     await db.flush()
-
-    return {"reset_token": reset_token, "message": "Password reset token generated"}
+    logger.warning("Password reset code for user %r (valid 1 hour): %s", user.username, user.reset_token)
+    return {"message": message}
 
 
 @app.post("/api/auth/reset-password")
 async def reset_password(
     req: ResetPasswordRequest,
-    db: AsyncSession = Depends(get_db),
+    request: Request,
+    db: AsyncSession = DB,
 ):
     """Reset password using a valid reset token."""
+    key = client_key(request, req.username) + ":reset"
+    reset_limiter.check(key)
     result = await db.execute(select(User).where(User.username == req.username.strip()))
     user = result.scalar_one_or_none()
 
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid username or reset token")
-
-    # Validate token format
-    if not verify_reset_token(req.reset_token):
+    if not user or not verify_reset_token(req.reset_token) or user.reset_token is None \
+            or not hmac.compare_digest(user.reset_token, req.reset_token):
+        reset_limiter.hit(key)
         raise HTTPException(status_code=400, detail="Invalid reset token")
 
-    # Validate token matches and not expired
-    if user.reset_token != req.reset_token:
-        raise HTTPException(status_code=400, detail="Invalid reset token")
-
-    # Check expiry - handle both naive and aware datetimes
     now = datetime.datetime.now(datetime.timezone.utc)
-    if user.reset_expiry is None:
-        raise HTTPException(status_code=400, detail="Reset token has expired")
-    
-    # Ensure both are comparable (handle SQLite returning naive datetimes)
-    expiry_check = user.reset_expiry
-    if expiry_check.tzinfo is None:
-        expiry_check = expiry_check.replace(tzinfo=datetime.timezone.utc)
-    
-    if expiry_check < now:
+    expiry = user.reset_expiry
+    if expiry is not None and expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=datetime.timezone.utc)  # SQLite returns naive datetimes
+    if expiry is None or expiry < now:
         raise HTTPException(status_code=400, detail="Reset token has expired")
 
-    # Update password and clear token
     user.password_hash = hash_password(req.new_password)
+    user.must_change_password = False
     user.reset_token = None
     user.reset_expiry = None
     await db.flush()
-
+    reset_limiter.reset(key)
     return {"message": "Password reset successfully"}
+
+
+# ══════════════════════════════════════════════
+# MEAL HELPERS
+# ══════════════════════════════════════════════
+
+def meal_breakdown_item(meal: Meal) -> dict:
+    """Serialize a persisted meal as a grouped-meal nutrition breakdown item."""
+    return {
+        "id": meal.id,
+        "name": meal.name,
+        "calories": meal.calories,
+        "protein": meal.protein,
+        "carbs": meal.carbs,
+        "fat": meal.fat,
+        "weight_g": meal.weight_g,
+    }
+
+
+def single_meal_response(m: Meal) -> MealResponse:
+    return MealResponse(
+        id=m.id, meal_date=m.meal_date, name=m.name,
+        calories=m.calories, protein=m.protein, carbs=m.carbs, fat=m.fat,
+        weight_g=m.weight_g, group_token=m.group_token, is_group=False, items=None,
+        meal_type=m.meal_type, source=m.source, barcode=m.barcode,
+        nutri_grade=m.nutri_grade, created_at=m.created_at,
+    )
+
+
+def group_title(group: list[Meal]) -> str:
+    named = next((m.group_name for m in group if m.group_name), None)
+    if named:
+        return named
+    names = [m.name for m in group]
+    if len(names) <= 2:
+        return " & ".join(names)
+    return f"{names[0]}, {names[1]} +{len(names) - 2} more"
+
+
+def build_meal_list(meals: list[Meal]) -> tuple[list[MealResponse], dict]:
+    """Collapse rows sharing a group_token into one grouped entry, in logging order."""
+    groups: dict[str, list[Meal]] = {}
+    for m in meals:
+        if m.group_token:
+            groups.setdefault(m.group_token, []).append(m)
+
+    out: list[MealResponse] = []
+    seen: set[str] = set()
+    for m in meals:
+        if not m.group_token:
+            out.append(single_meal_response(m))
+            continue
+        if m.group_token in seen:
+            continue
+        seen.add(m.group_token)
+        g = groups[m.group_token]
+        out.append(MealResponse(
+            id=g[0].id,
+            meal_date=g[0].meal_date,
+            name=group_title(g),
+            calories=sum(x.calories for x in g),
+            protein=sum(x.protein for x in g),
+            carbs=sum(x.carbs for x in g),
+            fat=sum(x.fat for x in g),
+            weight_g=sum(x.weight_g for x in g),
+            group_token=m.group_token,
+            is_group=True,
+            items=[meal_breakdown_item(x) for x in g],
+            meal_type=g[0].meal_type,
+            source=g[0].source,
+            created_at=g[0].created_at,
+        ))
+
+    totals = {
+        "total_calories": sum(m.calories for m in meals),
+        "total_protein": sum(m.protein for m in meals),
+        "total_carbs": sum(m.carbs for m in meals),
+        "total_fat": sum(m.fat for m in meals),
+    }
+    return out, totals
+
+
+def parse_date(value: Optional[str]) -> datetime.date:
+    if not value:
+        return datetime.date.today()
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+
+async def get_owned_meal(db: AsyncSession, meal_id: int, user: User) -> Meal:
+    result = await db.execute(select(Meal).where(Meal.id == meal_id, Meal.user_id == user.id))
+    meal = result.scalar_one_or_none()
+    if not meal:
+        raise HTTPException(status_code=404, detail="Meal not found")
+    return meal
+
+
+def new_meal(user: User, meal: MealCreate, **overrides) -> Meal:
+    data = meal.model_dump()
+    data.update(overrides)
+    return Meal(user_id=user.id, **data)
 
 
 # ══════════════════════════════════════════════
@@ -319,196 +451,139 @@ async def reset_password(
 async def get_meals(
     date: Optional[str] = None,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    if date:
-        try:
-            meal_date = datetime.date.fromisoformat(date)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
-    else:
-        meal_date = datetime.date.today()
-
+    meal_date = parse_date(date)
     result = await db.execute(
         select(Meal).where(
             Meal.user_id == current_user.id,
             Meal.meal_date == meal_date,
-        ).order_by(Meal.created_at)
+        ).order_by(Meal.created_at, Meal.id)
     )
-    meals = result.scalars().all()
+    meals, totals = build_meal_list(list(result.scalars().all()))
+    return MealListResponse(meals=meals, **totals)
 
-    # Group meals by group_token
-    grouped_meals: dict[str, list[Meal]] = {}
-    ungrouped_meals: list[Meal] = []
-    for m in meals:
-        if m.group_token:
-            grouped_meals.setdefault(m.group_token, []).append(m)
-        else:
-            ungrouped_meals.append(m)
 
-    # Build response with grouping info
-    response_meals: list[MealResponse] = []
-    total_cal = 0.0
-    total_protein = 0.0
-    total_carbs = 0.0
-    total_fat = 0.0
-
-    # Add individual meals first
-    for m in ungrouped_meals:
-        response_meals.append(MealResponse(
-            id=m.id,
-            meal_date=m.meal_date,
-            name=m.name,
-            calories=m.calories,
-            protein=m.protein,
-            carbs=m.carbs,
-            fat=m.fat,
-            weight_g=m.weight_g,
-            group_token=m.group_token,
-            is_group=False,
-            items=None,
-        ))
-        total_cal += m.calories
-        total_protein += m.protein
-        total_carbs += m.carbs
-        total_fat += m.fat
-
-    # Add grouped meals
-    for token, group_meals in grouped_meals.items():
-        if group_meals:
-            # Use first meal's data as group summary
-            first = group_meals[0]
-            response_meals.append(MealResponse(
-                id=first.id,
-                meal_date=first.meal_date,
-                name=f"Meal ({len(group_meals)} items)",
-                calories=sum(m.calories for m in group_meals),
-                protein=sum(m.protein for m in group_meals),
-                carbs=sum(m.carbs for m in group_meals),
-                fat=sum(m.fat for m in group_meals),
-                weight_g=sum(m.weight_g for m in group_meals),
-                group_token=token,
-                is_group=True,
-                items=[meal_breakdown_item(m) for m in group_meals],
-            ))
-            total_cal += sum(m.calories for m in group_meals)
-            total_protein += sum(m.protein for m in group_meals)
-            total_carbs += sum(m.carbs for m in group_meals)
-            total_fat += sum(m.fat for m in group_meals)
-
-    return MealListResponse(
-        meals=response_meals,
-        total_calories=total_cal,
-        total_protein=total_protein,
-        total_carbs=total_carbs,
-        total_fat=total_fat,
+@app.get("/api/meals/recent", response_model=list[RecentFood])
+async def recent_foods(
+    limit: int = 20,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """Distinct recently-logged foods (by name), most recent first, for one-tap re-logging."""
+    limit = max(1, min(limit, 50))
+    result = await db.execute(
+        select(Meal).where(Meal.user_id == current_user.id)
+        .order_by(Meal.created_at.desc(), Meal.id.desc()).limit(400)
     )
-
-
-class MealCreateList(BaseModel):
-    meals: list[MealCreate]
+    seen: dict[str, RecentFood] = {}
+    for m in result.scalars().all():
+        key = m.name.strip().lower()
+        if key in seen:
+            seen[key].times_logged += 1
+            continue
+        if len(seen) >= limit:
+            continue
+        seen[key] = RecentFood(
+            name=m.name, calories=m.calories, protein=m.protein, carbs=m.carbs,
+            fat=m.fat, weight_g=m.weight_g, barcode=m.barcode,
+            nutri_grade=m.nutri_grade, times_logged=1,
+        )
+    return list(seen.values())
 
 
 @app.post("/api/meals", response_model=MealResponse, status_code=201)
 async def add_meal(
     meal: MealCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    record = Meal(
-        user_id=current_user.id,
-        meal_date=meal.meal_date,
-        name=meal.name,
-        calories=meal.calories,
-        protein=meal.protein,
-        carbs=meal.carbs,
-        fat=meal.fat,
-        weight_g=meal.weight_g,
-        group_token=meal.group_token,
-    )
+    record = new_meal(current_user, meal)
     db.add(record)
     await db.flush()
     await db.refresh(record)
-    return MealResponse(
-        id=record.id,
-        meal_date=record.meal_date,
-        name=record.name,
-        calories=record.calories,
-        protein=record.protein,
-        carbs=record.carbs,
-        fat=record.fat,
-        weight_g=record.weight_g,
-        group_token=record.group_token,
-        is_group=False,
-        items=None,
-    )
+    return single_meal_response(record)
 
 
 @app.post("/api/meals/batch", response_model=list[MealResponse], status_code=201)
 async def add_meals_batch(
-    data: MealCreateList,
+    data: MealBatchCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     """Add multiple meals (e.g., from AI scan) with a shared group_token."""
     if not data.meals:
         return []
 
-    # Generate a single group_token for all meals in this batch
-    group_token = uuid.uuid4().hex[:16]
-
+    group_token = uuid.uuid4().hex[:16] if len(data.meals) > 1 else None
     records = []
     for meal in data.meals:
-        record = Meal(
-            user_id=current_user.id,
-            meal_date=meal.meal_date,
-            name=meal.name,
-            calories=meal.calories,
-            protein=meal.protein,
-            carbs=meal.carbs,
-            fat=meal.fat,
-            weight_g=meal.weight_g,
-            group_token=group_token,
-        )
+        overrides = {"group_token": group_token, "group_name": data.group_name if group_token else None}
+        if data.meal_type:
+            overrides["meal_type"] = data.meal_type
+        record = new_meal(current_user, meal, **overrides)
         db.add(record)
         records.append(record)
 
     await db.flush()
-
-    # Return all created meals
+    for r in records:
+        await db.refresh(r)
     return [
-        MealResponse(
-            id=r.id,
-            meal_date=r.meal_date,
-            name=r.name,
-            calories=r.calories,
-            protein=r.protein,
-            carbs=r.carbs,
-            fat=r.fat,
-            weight_g=r.weight_g,
-            group_token=r.group_token,
-            is_group=True,
-            items=None,  # Items will be populated in GET
-        )
+        single_meal_response(r).model_copy(update={"is_group": r.group_token is not None})
         for r in records
     ]
+
+
+@app.patch("/api/meals/{meal_id}", response_model=MealResponse)
+async def update_meal(
+    meal_id: int,
+    data: MealUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """Edit one meal row. For grouped meals this edits a single item of the group."""
+    meal = await get_owned_meal(db, meal_id, current_user)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None:
+            setattr(meal, field, value)
+    await db.flush()
+    await db.refresh(meal)
+    return single_meal_response(meal)
+
+
+@app.patch("/api/meals/groups/{group_token}")
+async def update_meal_group(
+    group_token: str,
+    data: MealGroupUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    result = await db.execute(
+        select(Meal).where(Meal.group_token == group_token, Meal.user_id == current_user.id)
+    )
+    meals = result.scalars().all()
+    if not meals:
+        raise HTTPException(status_code=404, detail="Meal not found")
+    updates = data.model_dump(exclude_unset=True)
+    for m in meals:
+        if "group_name" in updates:
+            m.group_name = (updates["group_name"] or "").strip() or None
+        if updates.get("meal_type"):
+            m.meal_type = updates["meal_type"]
+    await db.flush()
+    return {"message": "Meal updated"}
 
 
 @app.delete("/api/meals/{meal_id}")
 async def delete_meal(
     meal_id: int,
+    scope: Literal["group", "item"] = "group",
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    result = await db.execute(
-        select(Meal).where(Meal.id == meal_id, Meal.user_id == current_user.id)
-    )
-    meal = result.scalar_one_or_none()
-    if not meal:
-        raise HTTPException(status_code=404, detail="Meal not found")
-
-    # If meal has a group_token, delete all meals with same token
-    if meal.group_token:
+    """Delete a meal. For grouped meals the whole group goes unless scope=item."""
+    meal = await get_owned_meal(db, meal_id, current_user)
+    if meal.group_token and scope == "group":
         await db.execute(
             delete(Meal).where(
                 Meal.group_token == meal.group_token,
@@ -527,7 +602,7 @@ async def delete_meal(
 @app.get("/api/presets", response_model=list[PresetResponse])
 async def get_presets(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     result = await db.execute(
         select(Preset).where(Preset.user_id == current_user.id).order_by(Preset.name)
@@ -539,17 +614,9 @@ async def get_presets(
 async def create_preset(
     preset: PresetCreate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    record = Preset(
-        user_id=current_user.id,
-        name=preset.name,
-        calories=preset.calories,
-        protein=preset.protein,
-        carbs=preset.carbs,
-        fat=preset.fat,
-        description=preset.description,
-    )
+    record = Preset(user_id=current_user.id, **preset.model_dump())
     db.add(record)
     await db.flush()
     await db.refresh(record)
@@ -560,7 +627,7 @@ async def create_preset(
 async def delete_preset(
     preset_id: int,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     result = await db.execute(
         select(Preset).where(Preset.id == preset_id, Preset.user_id == current_user.id)
@@ -576,19 +643,22 @@ async def delete_preset(
 # BUDGET ENDPOINTS
 # ══════════════════════════════════════════════
 
+async def get_or_create_budget(db: AsyncSession, user: User) -> Budget:
+    result = await db.execute(select(Budget).where(Budget.user_id == user.id))
+    budget = result.scalar_one_or_none()
+    if not budget:
+        budget = Budget(user_id=user.id, daily_calories=DEFAULT_BUDGET)
+        db.add(budget)
+        await db.flush()
+    return budget
+
+
 @app.get("/api/budget", response_model=BudgetResponse)
 async def get_budget(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    result = await db.execute(
-        select(Budget).where(Budget.user_id == current_user.id)
-    )
-    budget = result.scalar_one_or_none()
-    if not budget:
-        budget = Budget(user_id=current_user.id, daily_calories=2000)
-        db.add(budget)
-        await db.flush()
+    budget = await get_or_create_budget(db, current_user)
     return BudgetResponse(daily_calories=budget.daily_calories)
 
 
@@ -596,15 +666,9 @@ async def get_budget(
 async def update_budget(
     data: BudgetUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    result = await db.execute(
-        select(Budget).where(Budget.user_id == current_user.id)
-    )
-    budget = result.scalar_one_or_none()
-    if not budget:
-        budget = Budget(user_id=current_user.id)
-        db.add(budget)
+    budget = await get_or_create_budget(db, current_user)
     budget.daily_calories = data.daily_calories
     await db.flush()
     return BudgetResponse(daily_calories=budget.daily_calories)
@@ -614,15 +678,17 @@ async def update_budget(
 # PROFILE ENDPOINTS
 # ══════════════════════════════════════════════
 
+async def get_profile_row(db: AsyncSession, user: User) -> Optional[UserProfile]:
+    result = await db.execute(select(UserProfile).where(UserProfile.user_id == user.id))
+    return result.scalar_one_or_none()
+
+
 @app.get("/api/profile", response_model=ProfileResponse)
 async def get_profile(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == current_user.id)
-    )
-    profile = result.scalar_one_or_none()
+    profile = await get_profile_row(db, current_user)
     if not profile:
         return ProfileResponse()
     return ProfileResponse.model_validate(profile)
@@ -632,32 +698,16 @@ async def get_profile(
 async def update_profile(
     data: ProfileUpdate,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == current_user.id)
-    )
-    profile = result.scalar_one_or_none()
-
+    profile = await get_profile_row(db, current_user)
     if not profile:
         profile = UserProfile(user_id=current_user.id)
         db.add(profile)
 
-    # Update provided fields
-    if data.height_cm is not None:
-        profile.height_cm = data.height_cm
-    if data.weight_kg is not None:
-        profile.weight_kg = data.weight_kg
-    if data.age is not None:
-        profile.age = data.age
-    if data.gender is not None:
-        profile.gender = data.gender
-    if data.activity_level is not None:
-        profile.activity_level = data.activity_level
-    if data.goal is not None:
-        profile.goal = data.goal
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(profile, field, value)
 
-    # Calculate BMI and TDEE using helper function
     profile.bmi, profile.tdee = calculate_bmi_tdee(
         height_cm=profile.height_cm,
         weight_kg=profile.weight_kg,
@@ -679,60 +729,28 @@ async def update_profile(
 @app.get("/api/goals", response_model=GoalSummary)
 async def get_goals(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    # Get profile and budget
-    profile_result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == current_user.id)
-    )
-    profile = profile_result.scalar_one_or_none()
+    """Daily targets. The budget is the single calorie target; the profile-based
+    figure is returned separately as `recommended_calories`."""
+    profile = await get_profile_row(db, current_user)
+    budget = await get_or_create_budget(db, current_user)
+    calories = budget.daily_calories
 
-    budget_result = await db.execute(
-        select(Budget).where(Budget.user_id == current_user.id)
-    )
-    budget = budget_result.scalar_one_or_none()
+    bmr = 0.0
+    tdee = float(calories)
+    recommended = None
+    weight = goal = None
+    if profile:
+        weight, goal = profile.weight_kg, profile.goal
+        bmr = calculate_bmr(profile.weight_kg, profile.height_cm, profile.age, profile.gender) or 0.0
+        if bmr and profile.activity_level:
+            tdee = bmr * ACTIVITY_MULTIPLIERS.get(profile.activity_level, 1.55)
+        if profile.tdee is not None:
+            recommended = round(profile.tdee)
 
-    # Determine calorie target
-    tdee_value = 2000.0
-    calories = 2000
-
-    if profile and profile.tdee is not None:
-        tdee_value = profile.tdee
-        calories = round(profile.tdee)
-
-    # Calculate BMR from profile data if available
-    bmr_value = 0.0
-    if (
-        profile
-        and profile.age is not None
-        and profile.gender is not None
-        and profile.weight_kg is not None
-        and profile.height_cm is not None
-    ):
-        if profile.gender == "male":
-            bmr_value = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) + 5
-        else:
-            bmr_value = (10 * profile.weight_kg) + (6.25 * profile.height_cm) - (5 * profile.age) - 161
-    else:
-        bmr_value = 0.0
-
-    # If no profile TDEE, check budget
-    if profile is None or profile.tdee is None:
-        if budget:
-            calories = budget.daily_calories
-
-    # Macro split
-    protein = round(calories * 0.30 / 4)
-    carbs = round(calories * 0.40 / 4)
-    fat = round(calories * 0.30 / 9)
-
-    # Water recommendation
-    if profile and profile.weight_kg is not None:
-        water_ml = round(profile.weight_kg * 35)
-    else:
-        water_ml = 2500
-
-    bmi_val = profile.bmi if profile else None
+    protein, carbs, fat = macro_targets(calories, weight, goal)
+    water_ml = round(weight * 35) if weight else 2500
 
     return GoalSummary(
         calories=calories,
@@ -740,10 +758,54 @@ async def get_goals(
         carbs=carbs,
         fat=fat,
         water_ml=water_ml,
-        bmr=bmr_value,
-        tdee=tdee_value,
-        bmi=bmi_val,
+        bmr=bmr,
+        tdee=tdee,
+        bmi=profile.bmi if profile else None,
+        recommended_calories=recommended,
     )
+
+
+# ══════════════════════════════════════════════
+# WATER ENDPOINTS
+# ══════════════════════════════════════════════
+
+async def water_goal(db: AsyncSession, user: User) -> int:
+    profile = await get_profile_row(db, user)
+    return round(profile.weight_kg * 35) if profile and profile.weight_kg else 2500
+
+
+@app.get("/api/water", response_model=WaterResponse)
+async def get_water(
+    date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    log_date = parse_date(date)
+    result = await db.execute(
+        select(WaterLog).where(WaterLog.user_id == current_user.id, WaterLog.log_date == log_date)
+    )
+    row = result.scalar_one_or_none()
+    return WaterResponse(log_date=log_date, amount_ml=row.amount_ml if row else 0,
+                         goal_ml=await water_goal(db, current_user))
+
+
+@app.post("/api/water", response_model=WaterResponse)
+async def add_water(
+    data: WaterUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    result = await db.execute(
+        select(WaterLog).where(WaterLog.user_id == current_user.id, WaterLog.log_date == data.log_date)
+    )
+    row = result.scalar_one_or_none()
+    if row is None:
+        row = WaterLog(user_id=current_user.id, log_date=data.log_date, amount_ml=0)
+        db.add(row)
+    row.amount_ml = max(0, min(20000, (row.amount_ml or 0) + data.delta_ml))
+    await db.flush()
+    return WaterResponse(log_date=row.log_date, amount_ml=row.amount_ml,
+                         goal_ml=await water_goal(db, current_user))
 
 
 # ══════════════════════════════════════════════
@@ -752,33 +814,29 @@ async def get_goals(
 
 @app.get("/api/history", response_model=HistoryResponse)
 async def get_history(
+    days: int = 7,
+    end: Optional[str] = None,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
-    cutoff = datetime.date.today() - datetime.timedelta(days=7)
+    """Days with meals in the `days`-long window ending at `end` (the client's today)."""
+    days = max(1, min(days, 120))
+    end_date = parse_date(end)
+    cutoff = end_date - datetime.timedelta(days=days)
     result = await db.execute(
         select(Meal)
-        .where(Meal.user_id == current_user.id, Meal.meal_date >= cutoff)
-        .order_by(Meal.meal_date.desc(), Meal.created_at)
+        .where(Meal.user_id == current_user.id, Meal.meal_date >= cutoff, Meal.meal_date <= end_date)
+        .order_by(Meal.meal_date.desc(), Meal.created_at, Meal.id)
     )
-    meals = result.scalars().all()
 
-    days: dict[datetime.date, list[Meal]] = {}
-    for m in meals:
-        days.setdefault(m.meal_date, []).append(m)
+    by_day: dict[datetime.date, list[Meal]] = {}
+    for m in result.scalars().all():
+        by_day.setdefault(m.meal_date, []).append(m)
 
     history_days = []
-    for d in sorted(days.keys(), reverse=True):
-        day_meals = days[d]
-        history_days.append(HistoryDay(
-            date=d,
-            meals=[MealResponse.model_validate(m) for m in day_meals],
-            total_calories=sum(m.calories for m in day_meals),
-            total_protein=sum(m.protein for m in day_meals),
-            total_carbs=sum(m.carbs for m in day_meals),
-            total_fat=sum(m.fat for m in day_meals),
-        ))
-
+    for d in sorted(by_day, reverse=True):
+        meals, totals = build_meal_list(by_day[d])
+        history_days.append(HistoryDay(date=d, meals=meals, **totals))
     return HistoryResponse(days=history_days)
 
 
@@ -788,8 +846,8 @@ async def get_history(
 
 
 class ImportData(BaseModel):
-    meals: Optional[list[dict]] = None
-    presets: Optional[list[dict]] = None
+    meals: Optional[list[dict]] = Field(None, max_length=50000)
+    presets: Optional[list[dict]] = Field(None, max_length=5000)
     budget: Optional[dict] = None
     profile: Optional[dict] = None
 
@@ -797,14 +855,12 @@ class ImportData(BaseModel):
 @app.get("/api/export")
 async def export_data(
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     """Export all user data including meals, presets, budget, and profile."""
-    # Get meals (all time)
     meals_result = await db.execute(
         select(Meal).where(Meal.user_id == current_user.id).order_by(Meal.meal_date.desc(), Meal.created_at)
     )
-    meals = meals_result.scalars().all()
     meals_data = [
         {
             "name": m.name,
@@ -814,15 +870,19 @@ async def export_data(
             "fat": m.fat,
             "weight_g": m.weight_g,
             "meal_date": m.meal_date.isoformat(),
+            "meal_type": m.meal_type,
+            "group_token": m.group_token,
+            "group_name": m.group_name,
+            "source": m.source,
+            "barcode": m.barcode,
+            "nutri_grade": m.nutri_grade,
         }
-        for m in meals
+        for m in meals_result.scalars().all()
     ]
 
-    # Get presets
     presets_result = await db.execute(
         select(Preset).where(Preset.user_id == current_user.id).order_by(Preset.name)
     )
-    presets = presets_result.scalars().all()
     presets_data = [
         {
             "name": p.name,
@@ -832,21 +892,11 @@ async def export_data(
             "fat": p.fat,
             "description": p.description,
         }
-        for p in presets
+        for p in presets_result.scalars().all()
     ]
 
-    # Get budget
-    budget_result = await db.execute(
-        select(Budget).where(Budget.user_id == current_user.id)
-    )
-    budget = budget_result.scalar_one_or_none()
-    budget_data = {"daily_calories": budget.daily_calories if budget else 2000}
-
-    # Get profile
-    profile_result = await db.execute(
-        select(UserProfile).where(UserProfile.user_id == current_user.id)
-    )
-    profile = profile_result.scalar_one_or_none()
+    budget = await get_or_create_budget(db, current_user)
+    profile = await get_profile_row(db, current_user)
     profile_data = {}
     if profile:
         profile_data = {
@@ -863,66 +913,74 @@ async def export_data(
     return {
         "meals": meals_data,
         "presets": presets_data,
-        "budget": budget_data,
+        "budget": {"daily_calories": budget.daily_calories},
         "profile": profile_data,
     }
+
+
+def validate_numeric(value, field_name, maximum=20000):
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise HTTPException(status_code=400, detail=f"{field_name} must be a valid number")
+    if value != value:  # NaN check
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be NaN")
+    if value < 0:
+        raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
+    if value > maximum:
+        raise HTTPException(status_code=400, detail=f"{field_name} is unrealistically large")
+    return float(value)
+
+
+def import_text(value, default: str, max_len: int) -> str:
+    text = str(value).strip() if value is not None else ""
+    return (text or default)[:max_len]
 
 
 @app.put("/api/import")
 async def import_data(
     data: ImportData,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = DB,
 ):
     """Import user data including meals, presets, budget, and profile."""
-    # Import budget
     if data.budget and "daily_calories" in data.budget:
-        budget_result = await db.execute(
-            select(Budget).where(Budget.user_id == current_user.id)
-        )
-        budget = budget_result.scalar_one_or_none()
-        if not budget:
-            budget = Budget(user_id=current_user.id, daily_calories=data.budget["daily_calories"])
-            db.add(budget)
-        else:
-            budget.daily_calories = data.budget["daily_calories"]
+        try:
+            daily = BudgetUpdate(daily_calories=data.budget["daily_calories"]).daily_calories
+        except Exception:
+            raise HTTPException(status_code=400, detail="daily_calories must be between 500 and 10000")
+        budget = await get_or_create_budget(db, current_user)
+        budget.daily_calories = daily
         await db.flush()
 
-    # Import profile
     if data.profile:
-        profile_result = await db.execute(
-            select(UserProfile).where(UserProfile.user_id == current_user.id)
-        )
-        profile = profile_result.scalar_one_or_none()
-
+        profile = await get_profile_row(db, current_user)
         if not profile:
             profile = UserProfile(user_id=current_user.id)
             db.add(profile)
 
-        # Update provided profile fields with validation
-        if "height_cm" in data.profile and data.profile["height_cm"] is not None:
+        if data.profile.get("height_cm") is not None:
             height_val = data.profile["height_cm"]
             if not isinstance(height_val, (int, float)) or height_val < 50 or height_val > 300:
                 raise HTTPException(status_code=400, detail="height_cm must be between 50 and 300")
             profile.height_cm = height_val
-        if "weight_kg" in data.profile and data.profile["weight_kg"] is not None:
+        if data.profile.get("weight_kg") is not None:
             weight_val = data.profile["weight_kg"]
             if not isinstance(weight_val, (int, float)) or weight_val < 10 or weight_val > 500:
                 raise HTTPException(status_code=400, detail="weight_kg must be between 10 and 500")
             profile.weight_kg = weight_val
-        if "age" in data.profile and data.profile["age"] is not None:
+        if data.profile.get("age") is not None:
             age_val = data.profile["age"]
             if not isinstance(age_val, int) or age_val < 1 or age_val > 150:
                 raise HTTPException(status_code=400, detail="age must be between 1 and 150")
             profile.age = age_val
-        if "gender" in data.profile and data.profile["gender"] is not None:
+        if data.profile.get("gender") in ("male", "female"):
             profile.gender = data.profile["gender"]
-        if "activity_level" in data.profile and data.profile["activity_level"] is not None:
+        if data.profile.get("activity_level") in ACTIVITY_MULTIPLIERS:
             profile.activity_level = data.profile["activity_level"]
-        if "goal" in data.profile and data.profile["goal"] is not None:
+        if data.profile.get("goal") in GOAL_MODIFIERS:
             profile.goal = data.profile["goal"]
 
-        # Recalculate BMI and TDEE using helper function
         profile.bmi, profile.tdee = calculate_bmi_tdee(
             height_cm=profile.height_cm,
             weight_kg=profile.weight_kg,
@@ -931,108 +989,187 @@ async def import_data(
             activity_level=profile.activity_level,
             goal=profile.goal,
         )
-
         await db.flush()
 
-    # Import meals
     if data.meals:
+        # Re-key groups so imported meals never merge into existing ones.
+        token_map: dict[str, str] = {}
         for meal_data in data.meals:
-            # Validate date format
+            if not isinstance(meal_data, dict):
+                raise HTTPException(status_code=400, detail="Each meal must be an object")
             date_str = meal_data.get("meal_date", datetime.date.today().isoformat())
             try:
                 meal_date = datetime.date.fromisoformat(date_str)
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400, detail=f"Invalid date format: {date_str}. Use YYYY-MM-DD.")
 
-            # Validate numeric fields (must be non-negative numbers, not NaN)
-            def validate_numeric(value, field_name):
-                if value is None:
-                    return 0
-                if not isinstance(value, (int, float)):
-                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid number")
-                if value != value:  # NaN check
-                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be NaN")
-                if value < 0:
-                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
-                return float(value)
+            old_token = meal_data.get("group_token")
+            group_token = None
+            if old_token:
+                group_token = token_map.setdefault(str(old_token), uuid.uuid4().hex[:16])
+            meal_type = meal_data.get("meal_type")
+            grade = meal_data.get("nutri_grade")
+            barcode = meal_data.get("barcode")
 
-            calories = validate_numeric(meal_data.get("calories"), "calories")
-            protein = validate_numeric(meal_data.get("protein"), "protein")
-            carbs = validate_numeric(meal_data.get("carbs"), "carbs")
-            fat = validate_numeric(meal_data.get("fat"), "fat")
-            weight_g = validate_numeric(meal_data.get("weight_g"), "weight_g")
-
-            meal = Meal(
+            db.add(Meal(
                 user_id=current_user.id,
                 meal_date=meal_date,
-                name=meal_data.get("name", "Imported Meal"),
-                calories=calories,
-                protein=protein,
-                carbs=carbs,
-                fat=fat,
-                weight_g=weight_g,
-            )
-            db.add(meal)
+                name=import_text(meal_data.get("name"), "Imported Meal", 200),
+                calories=validate_numeric(meal_data.get("calories"), "calories"),
+                protein=validate_numeric(meal_data.get("protein"), "protein", 5000),
+                carbs=validate_numeric(meal_data.get("carbs"), "carbs", 5000),
+                fat=validate_numeric(meal_data.get("fat"), "fat", 5000),
+                weight_g=validate_numeric(meal_data.get("weight_g"), "weight_g"),
+                group_token=group_token,
+                group_name=import_text(meal_data.get("group_name"), "", 200) or None,
+                meal_type=meal_type if meal_type in MEAL_TYPES else None,
+                source=import_text(meal_data.get("source"), "", 20) or None,
+                barcode=barcode if isinstance(barcode, str) and re.fullmatch(r"\d{8,14}", barcode) else None,
+                nutri_grade=grade if grade in ("a", "b", "c", "d", "e") else None,
+            ))
         await db.flush()
 
-    # Import presets
     if data.presets:
         for preset_data in data.presets:
-            # Validate numeric fields for presets
-            def validate_numeric(value, field_name):
-                if value is None:
-                    return 0
-                if not isinstance(value, (int, float)):
-                    raise HTTPException(status_code=400, detail=f"{field_name} must be a valid number")
-                if value != value:  # NaN check
-                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be NaN")
-                if value < 0:
-                    raise HTTPException(status_code=400, detail=f"{field_name} cannot be negative")
-                return float(value)
-
-            calories = validate_numeric(preset_data.get("calories"), "calories")
-            protein = validate_numeric(preset_data.get("protein"), "protein")
-            carbs = validate_numeric(preset_data.get("carbs"), "carbs")
-            fat = validate_numeric(preset_data.get("fat"), "fat")
-
-            preset = Preset(
+            if not isinstance(preset_data, dict):
+                raise HTTPException(status_code=400, detail="Each preset must be an object")
+            db.add(Preset(
                 user_id=current_user.id,
-                name=preset_data.get("name", "Imported Preset"),
-                calories=calories,
-                protein=protein,
-                carbs=carbs,
-                fat=fat,
-                description=preset_data.get("description", ""),
-            )
-            db.add(preset)
+                name=import_text(preset_data.get("name"), "Imported Preset", 200),
+                calories=validate_numeric(preset_data.get("calories"), "calories"),
+                protein=validate_numeric(preset_data.get("protein"), "protein", 5000),
+                carbs=validate_numeric(preset_data.get("carbs"), "carbs", 5000),
+                fat=validate_numeric(preset_data.get("fat"), "fat", 5000),
+                description=import_text(preset_data.get("description"), "", 500),
+            ))
         await db.flush()
 
     return {"message": "Data imported successfully"}
 
 
 # ══════════════════════════════════════════════
-# AI ANALYSIS ENDPOINT (existing)
+# BARCODE / PRODUCT ENDPOINT
 # ══════════════════════════════════════════════
 
+@app.get("/api/products/{barcode}")
+async def get_product(
+    barcode: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """Packaged food by barcode, with nutrition per 100 g and an explained Nutri-Score (A–E)."""
+    return await food_facts.lookup(db, barcode)
+
+
+# ══════════════════════════════════════════════
+# AI ANALYSIS ENDPOINT
+# ══════════════════════════════════════════════
+
+# ~6 MB of JPEG once base64-decoded; the client downsizes to ~1.5 MP anyway.
+MAX_IMAGE_B64 = 8_000_000
+
+
+class AnalyzeRequest(BaseModel):
+    image: str = Field(..., min_length=4, max_length=MAX_IMAGE_B64)
+    description: Optional[str] = Field(None, max_length=500)
+    remaining_calories: Optional[float] = Field(None, ge=-20000, le=20000)
+
+
+class FoodItem(BaseModel):
+    name: str
+    calories: float
+    protein: float
+    carbs: float
+    fat: float
+    weight_g: float
+
+
+class AnalyzeResponse(BaseModel):
+    meal_name: str = ""
+    items: list[FoodItem]
+    total: dict
+    suggestions: str
+
+
+def _to_float(v) -> float:
+    if isinstance(v, str):
+        m = re.search(r"-?\d+(\.\d+)?", v)
+        v = m.group(0) if m else 0
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(f, 20000.0)) if f == f else 0.0
+
+
+def normalize_analysis(raw: dict) -> dict:
+    """Coerce model output into the response schema; totals are recomputed from items."""
+    if not isinstance(raw, dict):
+        raise ValueError("Top-level JSON is not an object")
+    items = []
+    for it in raw.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        name = str(it.get("name") or "").strip()[:200] or "Food item"
+        items.append({
+            "name": name,
+            "calories": round(_to_float(it.get("calories")), 1),
+            "protein": round(_to_float(it.get("protein")), 1),
+            "carbs": round(_to_float(it.get("carbs")), 1),
+            "fat": round(_to_float(it.get("fat")), 1),
+            "weight_g": round(_to_float(it.get("weight_g") or it.get("weight"))),
+        })
+    total = {k: round(sum(i[k] for i in items), 1) for k in ("calories", "protein", "carbs", "fat")}
+    suggestion = raw.get("suggestions") or raw.get("suggestion") or ""
+    if isinstance(suggestion, list):
+        suggestion = " ".join(str(s) for s in suggestion)
+    return {
+        "meal_name": str(raw.get("meal_name") or "").strip()[:200],
+        "items": items,
+        "total": total,
+        "suggestions": str(suggestion).strip()[:600],
+    }
+
+
+def extract_json(content: str) -> dict:
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1] if "\n" in content else ""
+        content = content.rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        start, end = content.find("{"), content.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(content[start:end + 1])
+
+
 @app.post("/api/analyze", response_model=AnalyzeResponse)
-async def analyze_food(request: AnalyzeRequest):
+async def analyze_food(
+    request: AnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+):
     if not OPENROUTER_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="OPENROUTER_API_KEY is not set. Add it to the .env file.",
         )
 
-    user_content = [
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{request.image}"},
-        },
-    ]
+    image = request.image
+    mime = "image/jpeg"
+    if image.startswith("data:"):
+        header, _, image = image.partition(",")
+        mime = header[5:].split(";")[0] or mime
 
-    if request.description:
-        user_content.insert(
-            0, {"type": "text", "text": f"Description: {request.description}"}
-        )
+    hints = []
+    if request.description and request.description.strip():
+        hints.append(f"Description: {request.description.strip()}")
+    if request.remaining_calories is not None:
+        hints.append(f"Remaining calorie budget for today before this meal: {round(request.remaining_calories)} kcal")
+
+    user_content = [{"type": "text", "text": h} for h in hints]
+    user_content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image}"}})
 
     payload = {
         "model": LLM_MODEL,
@@ -1041,7 +1178,7 @@ async def analyze_food(request: AnalyzeRequest):
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.3,
-        "max_tokens": 1024,
+        "max_tokens": 1500,
     }
 
     headers = {
@@ -1051,8 +1188,7 @@ async def analyze_food(request: AnalyzeRequest):
         "X-Title": "Calorie Vision",
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        last_error = None
+    async with httpx.AsyncClient(timeout=90.0) as client:
         for attempt in range(MAX_RETRIES):
             try:
                 response = await client.post(
@@ -1061,40 +1197,35 @@ async def analyze_food(request: AnalyzeRequest):
                 response.raise_for_status()
                 break
             except httpx.HTTPStatusError as e:
-                last_error = e
-                if e.response.status_code >= 500 and attempt < MAX_RETRIES - 1:
-                    delay = RETRY_DELAY_SECONDS * (2 ** attempt)
-                    await asyncio.sleep(delay)
+                code = e.response.status_code
+                retryable = code >= 500 or code == 429
+                if retryable and attempt < MAX_RETRIES - 1:
+                    await asyncio.sleep(RETRY_DELAY_SECONDS * (2 ** attempt))
                     continue
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"OpenRouter API error after {attempt + 1} attempt(s): {e.response.status_code}",
-                )
+                detail = "The AI service is busy. Try again in a minute." if code == 429 \
+                    else f"OpenRouter API error after {attempt + 1} attempt(s): {code}"
+                raise HTTPException(status_code=502, detail=detail)
             except httpx.RequestError as e:
-                last_error = e
                 if attempt < MAX_RETRIES - 1:
-                    delay = RETRY_DELAY_SECONDS * (2 ** attempt)
-                    await asyncio.sleep(delay)
+                    await asyncio.sleep(RETRY_DELAY_SECONDS * (2 ** attempt))
                     continue
                 raise HTTPException(
                     status_code=502,
-                    detail=f"Failed to reach OpenRouter after {attempt + 1} attempt(s): {str(e)}",
+                    detail=f"Failed to reach OpenRouter after {attempt + 1} attempt(s): {type(e).__name__}",
                 )
 
     data = response.json()
 
     try:
         content = data["choices"][0]["message"]["content"]
-        content = content.strip()
-        if content.startswith("```"):
-            content = content.split("\n", 1)[1]
-            content = content.rsplit("```", 1)[0]
-            content = content.strip()
-        result = json.loads(content)
-    except (KeyError, IndexError, json.JSONDecodeError) as e:
+        if isinstance(content, list):  # some providers return content parts
+            content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        result = normalize_analysis(extract_json(content))
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        logger.warning("Unparseable LLM response: %s", str(data)[:1000])
         raise HTTPException(
             status_code=502,
-            detail=f"Failed to parse LLM response: {str(e)}. Raw: {data}",
+            detail=f"Failed to parse the AI response ({type(e).__name__}). Try again or add a description.",
         )
 
     return result

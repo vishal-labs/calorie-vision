@@ -1,5 +1,5 @@
 import datetime
-from sqlalchemy import String, Integer, Float, Date, Boolean, DateTime, ForeignKey, func
+from sqlalchemy import String, Integer, Float, Date, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from database import Base
 
@@ -21,6 +21,7 @@ class User(Base):
     presets: Mapped[list["Preset"]] = relationship("Preset", back_populates="user", cascade="all, delete-orphan")
     budget: Mapped["Budget"] = relationship("Budget", back_populates="user", uselist=False, cascade="all, delete-orphan")
     profile: Mapped["UserProfile"] = relationship("UserProfile", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    water_logs: Mapped[list["WaterLog"]] = relationship("WaterLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class Meal(Base):
@@ -36,6 +37,12 @@ class Meal(Base):
     fat: Mapped[float] = mapped_column(Float, default=0)
     weight_g: Mapped[float] = mapped_column(Float, default=0)
     group_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Added after the initial schema; must stay nullable so database.migrate() can add them in place.
+    group_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    meal_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    barcode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    nutri_grade: Mapped[str | None] = mapped_column(String(1), nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -86,3 +93,32 @@ class UserProfile(Base):
     bmi: Mapped[float] = mapped_column(Float, nullable=True)
 
     user: Mapped["User"] = relationship("User", back_populates="profile")
+
+
+class WaterLog(Base):
+    __tablename__ = "water_logs"
+    __table_args__ = (UniqueConstraint("user_id", "log_date", name="uq_water_user_date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    log_date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    amount_ml: Mapped[int] = mapped_column(Integer, default=0)
+
+    user: Mapped["User"] = relationship("User", back_populates="water_logs")
+
+
+class ProductCache(Base):
+    """Normalized Open Food Facts lookups, shared by all users."""
+    __tablename__ = "product_cache"
+
+    barcode: Mapped[str] = mapped_column(String(20), primary_key=True)
+    found: Mapped[bool] = mapped_column(Boolean, default=False)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AppSecret(Base):
+    __tablename__ = "app_secrets"
+
+    name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    value: Mapped[str] = mapped_column(String(200), nullable=False)

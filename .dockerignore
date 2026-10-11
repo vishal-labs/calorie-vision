@@ -8,3 +8,6 @@ __pycache__
 tests/
 *.md
 .pytest_cache
+scripts/
+.worktrees
+worktrees
