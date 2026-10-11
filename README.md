@@ -11,6 +11,8 @@ A self-hosted, phone-first calorie tracker. Snap a meal and an AI model estimate
 2. `docker compose up --build -d`
 3. Open `http://<host>:9670/`. The camera and barcode scanner need **https** on phones (any reverse proxy with TLS works); on plain http you can still upload photos and type barcodes.
 
+To update a running install: `git pull && docker compose up --build -d`. Your data lives in the `pgdata` volume and is kept (never run `docker compose down -v`, which deletes it).
+
 Database tables are created on first start. New columns are added in place on later starts, so existing data is kept.
 
 ### Optional settings (`.env`)
