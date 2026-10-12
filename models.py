@@ -36,6 +36,8 @@ class Meal(Base):
     carbs: Mapped[float] = mapped_column(Float, default=0)
     fat: Mapped[float] = mapped_column(Float, default=0)
     weight_g: Mapped[float] = mapped_column(Float, default=0)
+    # Nullable: added after launch (see database.add_missing_columns); NULL counts as 0.
+    fiber: Mapped[float | None] = mapped_column(Float, nullable=True)
     group_token: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Added after the initial schema; must stay nullable so database.migrate() can add them in place.
     group_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
@@ -60,6 +62,7 @@ class Preset(Base):
     protein: Mapped[float] = mapped_column(Float, default=0)
     carbs: Mapped[float] = mapped_column(Float, default=0)
     fat: Mapped[float] = mapped_column(Float, default=0)
+    fiber: Mapped[float | None] = mapped_column(Float, nullable=True)
     description: Mapped[str] = mapped_column(String(500), default="")
 
     user: Mapped["User"] = relationship("User", back_populates="presets")

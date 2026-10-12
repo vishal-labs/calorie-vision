@@ -11,7 +11,7 @@ Ideas for what to build next, roughly in priority order. Effort: **S** is an eve
 | **Photo of a nutrition label** | Products missing from Open Food Facts are the most common dead end after scanning. | M | On "not found", offer "Photograph the label". The AI reads the per-100 g table into the product form, and you confirm before logging. |
 | **Save a meal as a favourite** | Many people eat the same breakfast daily. Today only single foods can be saved. | M | Save a grouped meal (all items) to My foods and log it again in one tap. Needs a `preset_items` table or a JSON column. |
 | **Copy a day or meal** | "Same lunch as yesterday" should be one tap. | S | "Copy to today" on a meal sheet and on a Progress day. The API already supports batch logging. |
-| **Move a meal to another day or time** | Typed meals are often logged to the wrong day by mistake. | S | `meal_date` is already editable in `PATCH /api/meals/{id}`. Add a date picker to the meal sheet, and a group-level move endpoint. |
+| **Move a meal to another day** | Typed meals are often logged to the wrong day by mistake. Moving between breakfast/lunch/dinner/snacks already works. | S | `meal_date` is already editable in `PATCH /api/meals/{id}`. Add a date picker under "Logged under" in the meal sheet, and a group-level move endpoint. |
 
 ## Later
 
@@ -19,7 +19,7 @@ Ideas for what to build next, roughly in priority order. Effort: **S** is an eve
 |---|---|---|---|
 | **"Fix it with AI" on results** | Faster than editing numbers by hand: "the rice was half that" or "no ghee". | M | Send the current items plus the correction to the AI and replace the list. Reuse `/api/analyze/text` with the previous result as context. |
 | **Custom macro split** | Protein targets differ for lifting, keto, and so on. | S | Protein g/kg plus fat % in You. `macro_targets()` already takes these as inputs. |
-| **More nutrients** | Sugar, fibre and salt are already known for barcode products but aren't tracked daily. | M | Add nullable `sugars`, `fiber`, `salt` columns to meals (the migration handles it), ask the AI for them, and show them on Today as secondary lines. |
+| **Sugar and salt tracking** | Both are already known for barcode products but aren't tracked daily. | M | Same pattern as fiber: nullable `sugars` and `salt` columns on meals and presets (the migration handles it), ask the AI for them, and show them as secondary lines under the macros on Today. |
 | **Reminders** | Logging habits stick better with a nudge. | M | Web Push needs a service worker and VAPID keys; iOS supports it only for installed home-screen apps. Opt-in times per meal. |
 | **Offline logging** | Logging fails on bad mobile data. | L | Service worker plus a local queue that syncs when back online. Watch out: AI and barcode lookups still need the network. |
 | **Weekly summary** | One glance at the week's average, best day and protein hit rate. | S | A card on Progress first. Email or push later. |
@@ -54,4 +54,6 @@ Ideas for what to build next, roughly in priority order. Effort: **S** is an eve
 - Photo meal analysis with editable items.
 - "Type it in": describe a meal and the AI fills in the macros, including for past days.
 - Water tracking, meal types, earlier days.
+- Fiber tracking with a daily target, everywhere macros appear.
+- Move a logged meal between breakfast, lunch, dinner and snacks in one tap.
 - Security hardening: auth on AI endpoints, no leaked reset codes, persisted session secret, rate limiting, CSP.

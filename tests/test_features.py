@@ -245,7 +245,7 @@ class TestAnalysisNormalization:
         assert out["total"]["calories"] == 120
         assert out["items"][0]["weight_g"] == 0
         assert out["items"][1] == {"name": "Food item", "calories": 0.0, "protein": 0.0,
-                                   "carbs": 1.0, "fat": 1.0, "weight_g": 30}
+                                   "carbs": 1.0, "fat": 1.0, "fiber": 0.0, "weight_g": 30}
         assert out["suggestions"] == "Eat veg"
 
     def test_extracts_json_from_prose(self):
@@ -296,3 +296,85 @@ class TestAnalyzeText:
         headers = auth_headers(await create_test_user(db_session))
         res = await client.post("/api/analyze/text", headers=headers, json={"text": "2 rotis"})
         assert res.status_code == 502
+
+
+class TestFiber:
+    async def test_totals_groups_and_recent(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        await client.post("/api/meals", json={**RICE, "fiber": 1.5}, headers=headers)
+        await client.post("/api/meals/batch", json={"meals": [
+            {**DAL, "fiber": 8}, {"name": "Salad", "calories": 40, "fiber": 3}]}, headers=headers)
+        data = (await client.get(f"/api/meals?date={date.today()}", headers=headers)).json()
+        assert data["total_fiber"] == 12.5
+        group = next(m for m in data["meals"] if m["is_group"])
+        assert group["fiber"] == 11
+        assert {i["name"]: i["fiber"] for i in group["items"]} == {"Dal": 8, "Salad": 3}
+        hist = (await client.get(f"/api/history?end={date.today()}", headers=headers)).json()
+        assert hist["days"][0]["total_fiber"] == 12.5
+        recent = (await client.get("/api/meals/recent", headers=headers)).json()
+        assert next(f for f in recent if f["name"] == "Rice")["fiber"] == 1.5
+
+    async def test_edit_and_validation(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        meal = (await client.post("/api/meals", json=RICE, headers=headers)).json()
+        assert meal["fiber"] == 0
+        res = await client.patch(f"/api/meals/{meal['id']}", json={"fiber": 4.2}, headers=headers)
+        assert res.json()["fiber"] == 4.2
+        res = await client.post("/api/meals", json={**RICE, "fiber": -1}, headers=headers)
+        assert res.status_code == 422
+
+    async def test_old_rows_without_fiber_count_as_zero(self, client: AsyncClient, db_session):
+        from models import Meal, Preset
+        user = await create_test_user(db_session)
+        headers = auth_headers(user)
+        db_session.add(Meal(user_id=user.id, meal_date=date.today(), name="Old", calories=100,
+                            protein=1, carbs=2, fat=3, weight_g=0, fiber=None))
+        db_session.add(Preset(user_id=user.id, name="Old preset", calories=50, fiber=None))
+        await db_session.commit()
+        data = (await client.get(f"/api/meals?date={date.today()}", headers=headers)).json()
+        assert data["total_fiber"] == 0 and data["meals"][0]["fiber"] == 0
+        presets = (await client.get("/api/presets", headers=headers)).json()
+        assert presets[0]["fiber"] == 0
+
+    async def test_preset_and_goal(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        res = await client.post("/api/presets", json={"name": "Oats", "calories": 150, "fiber": 4}, headers=headers)
+        assert res.json()["fiber"] == 4
+        await client.put("/api/budget", json={"daily_calories": 2500}, headers=headers)
+        assert (await client.get("/api/goals", headers=headers)).json()["fiber"] == 35
+        await client.put("/api/budget", json={"daily_calories": 1000}, headers=headers)
+        assert (await client.get("/api/goals", headers=headers)).json()["fiber"] == 20  # floor
+
+    async def test_export_import_roundtrip(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        await client.post("/api/meals", json={**RICE, "fiber": 2}, headers=headers)
+        exported = (await client.get("/api/export", headers=headers)).json()
+        assert exported["meals"][0]["fiber"] == 2
+        headers2 = auth_headers(await create_test_user(db_session, username="other"))
+        assert (await client.put("/api/import", json=exported, headers=headers2)).status_code == 200
+        data = (await client.get(f"/api/meals?date={date.today()}", headers=headers2)).json()
+        assert data["total_fiber"] == 2
+
+    def test_ai_output_fiber(self):
+        out = main.normalize_analysis({"items": [
+            {"name": "Dal", "calories": 180, "fiber": "7 g"}, {"name": "Roti", "calories": 120, "fibre": 2}]})
+        assert [i["fiber"] for i in out["items"]] == [7.0, 2.0]
+        assert out["total"]["fiber"] == 9.0
+
+
+class TestMoveMealType:
+    async def test_move_single_and_group(self, client: AsyncClient, db_session):
+        headers = auth_headers(await create_test_user(db_session))
+        single = (await client.post("/api/meals", json={**RICE, "meal_type": "lunch"}, headers=headers)).json()
+        group = await log_group(client, headers, meal_type="lunch")
+
+        res = await client.patch(f"/api/meals/{single['id']}", json={"meal_type": "breakfast"}, headers=headers)
+        assert res.json()["meal_type"] == "breakfast"
+        res = await client.patch(f"/api/meals/groups/{group['group_token']}", json={"meal_type": "dinner"}, headers=headers)
+        assert res.status_code == 200
+
+        meals = (await client.get(f"/api/meals?date={date.today()}", headers=headers)).json()["meals"]
+        assert {m["name"]: m["meal_type"] for m in meals} == {"Rice": "breakfast", "Rice & Dal": "dinner"}
+        # Moving doesn't touch the rest of the entry
+        moved = next(m for m in meals if m["name"] == "Rice")
+        assert moved["calories"] == RICE["calories"]

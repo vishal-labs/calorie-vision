@@ -93,9 +93,9 @@ RATED_PRODUCT = food_facts.apply_ai_rating(UNRATED_PRODUCT, backend.normalize_pr
 MOCK_ANALYSIS = {
     "meal_name": "Chicken rice bowl",
     "items": [
-        {"name": "Grilled chicken", "calories": 280, "protein": 40, "carbs": 0, "fat": 12, "weight_g": 150},
-        {"name": "Basmati rice", "calories": 260, "protein": 5, "carbs": 56, "fat": 1, "weight_g": 200},
-        {"name": "Cucumber salad", "calories": 40, "protein": 1, "carbs": 6, "fat": 2, "weight_g": 80},
+        {"name": "Grilled chicken", "calories": 280, "protein": 40, "carbs": 0, "fat": 12, "fiber": 0, "weight_g": 150},
+        {"name": "Basmati rice", "calories": 260, "protein": 5, "carbs": 56, "fat": 1, "fiber": 2, "weight_g": 200},
+        {"name": "Cucumber salad", "calories": 40, "protein": 1, "carbs": 6, "fat": 2, "fiber": 1.5, "weight_g": 80},
     ],
     "total": {"calories": 580, "protein": 46, "carbs": 62, "fat": 15},
     "suggestions": "Swap half the rice for salad and you'd have room for a 150 kcal snack later.",
@@ -182,10 +182,12 @@ def main():
         page.fill('.sheet input[name="protein"]', "17")
         page.fill('.sheet input[name="carbs"]', "6")
         page.fill('.sheet input[name="fat"]', "4")
+        page.fill('.sheet input[name="fiber"]', "2")
         page.check('.sheet input[name="save_preset"]')
         page.click('.sheet [data-role="save"]')
         expect(page.locator(".meal-row-name", has_text="Greek yogurt")).to_be_visible()
         expect(page.locator("#hero-value")).to_have_text("1,850")
+        expect(page.locator("#fiber-row .fiber-val")).to_contain_text("2 / 28 g")
 
         # Snap a meal (mocked AI)
         page.click(".tabbar-fab")
@@ -209,6 +211,8 @@ def main():
         expect(page.locator("#screen-results")).to_be_hidden()
         expect(page.locator(".meal-row-name", has_text="Chicken rice bowl")).to_be_visible()
         expect(page.locator("#hero-value")).to_have_text("1,375")
+        # 2 (yogurt) + 1.5 (rice, x0.75) ; salad was removed
+        expect(page.locator("#fiber-row .fiber-val")).to_contain_text("4 / 28 g")
         shot(page, "07-today-logged")
         page.screenshot(path=str(SHOTS / "07b-today-full.png"), full_page=True)
 
@@ -223,6 +227,18 @@ def main():
         expect(page.locator("#hero-value")).to_have_text("1,470")
         page.keyboard.press("Escape")
         expect(page.locator(".sheet")).to_have_count(0)
+
+        # Move a logged meal to another meal type from its sheet (instant, no Save)
+        page.click('.meal-row:has-text("Greek yogurt")')
+        expect(page.locator(".sheet .meal-mover")).to_be_visible()
+        target = page.locator(".sheet .meal-mover .chip:not(.is-on)").first
+        label = target.inner_text()
+        target.click()
+        expect(page.locator(".toast")).to_contain_text(f"Moved to {label}")
+        shot(page, "08b-move-meal")
+        page.keyboard.press("Escape")
+        expect(page.locator(".sheet")).to_have_count(0)
+        expect(page.locator(f'section[aria-label="{label}"] .meal-row-name', has_text="Greek yogurt")).to_be_visible()
 
         # Android-style back closes a sheet; the sheet must fit the phone even
         # with a long "Log again" row (regression: it used to force sideways scrolling)

@@ -32,7 +32,7 @@ docker compose logs app | grep "reset code"
 
 ## Features
 
-- **Today**: calories left, a fuel bar splitting what you've eaten into protein / carbs / fat, macro targets, water, and meals grouped into breakfast, lunch, dinner and snacks. Use the arrows to view or backfill earlier days.
+- **Today**: calories left, a fuel bar splitting what you've eaten into protein / carbs / fat, macro targets, fiber (target 14 g per 1,000 kcal), water, and meals grouped into breakfast, lunch, dinner and snacks. Tap a meal to move it to another meal type instantly. Use the arrows to view or backfill earlier days.
 - **Snap a meal**: photo → optional hint → per-item estimate. Adjust portions, fix or remove items, then log. Logged AI meals stay editable item by item.
 - **Type it in**: forgot the photo? Write what you ate in one line ("2 rotis, 1 bowl dal, 100 g paneer") and the AI splits it into items with macros on the same review screen. It logs to whichever day you're viewing, so missed meals can be backfilled. "Enter them yourself" still opens the plain manual form.
 - **Barcode**: live scanning on Android and iPhone (native `BarcodeDetector`, or the bundled ZXing WebAssembly reader), scanning from a photo, or typing the number. Product data comes from [Open Food Facts](https://world.openfoodfacts.org) and is cached for 7 days. Grades use the official one when available; otherwise they're computed with the 2023 Nutri-Score algorithm (`nutriscore.py`). If even that isn't possible (no nutrition facts), the AI rates the product from its name, ingredients and package photo, and estimates the nutrition. The result is labelled "rated by AI" and cached, so each product is rated once.

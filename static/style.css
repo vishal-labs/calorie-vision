@@ -29,6 +29,8 @@
     --protein: #199e70;
     --carbs: #3987e5;
     --fat: #d55181;
+    /* Fiber isn't a calorie source, so it never sits next to the macro trio in a chart. */
+    --fiber: #8fbf5a;
 
     /* Status */
     --over: #FF7A5C;
@@ -273,6 +275,15 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .macro-val small { font-family: var(--font-ui); font-size: 13px; font-weight: 500; color: var(--ink-3); margin-left: 2px; }
 .macro-bar { height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .macro-bar > span { display: block; height: 100%; background: var(--c); border-radius: 2px; transition: width 600ms var(--ease); }
+
+.fiber-row { display: flex; align-items: center; gap: 12px; margin-top: 16px; font-size: 13px; }
+.fiber-name { color: var(--ink-2); font-weight: 500; display: inline-flex; align-items: center; gap: 7px; }
+.fiber-name::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--fiber); }
+.fiber-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.fiber-bar > span { display: block; height: 100%; background: var(--fiber); border-radius: 2px; transition: width 600ms var(--ease); }
+.fiber-val { color: var(--ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fiber-val strong { color: var(--ink); font-family: var(--font-num); font-size: 16px; font-weight: 650; }
+.kv-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
 /* ─── Water ─── */
 .water { padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -603,6 +614,8 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .detail-macros { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .detail-macros span { display: inline-flex; align-items: center; gap: 6px; }
 .detail-macros i { width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
+.meal-mover { padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.meal-mover .chips { gap: 6px; }
 .edit-item { display: grid; gap: 12px; padding: 14px; border-radius: var(--r-m); background: var(--bg); }
 .danger-zone { display: flex; gap: 10px; flex-wrap: wrap; }
 

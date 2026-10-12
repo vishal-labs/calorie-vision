@@ -1,10 +1,13 @@
 import datetime
-from pydantic import BaseModel, Field, field_validator
-from typing import Literal, Optional
+from pydantic import BaseModel, BeforeValidator, Field, field_validator
+from typing import Annotated, Literal, Optional
 from datetime import date
 
 MealType = Literal["breakfast", "lunch", "dinner", "snack"]
 MealSource = Literal["ai", "barcode", "manual", "preset", "recent"]
+
+# Columns added after launch are NULL on old rows; report them as 0.
+ZeroIfNone = Annotated[float, BeforeValidator(lambda v: 0 if v is None else v)]
 
 # Upper bounds stop typos (an extra zero) and garbage imports from wrecking totals.
 Kcal = Field(..., ge=0, le=20000)
@@ -48,6 +51,7 @@ class MealCreate(BaseModel):
     protein: float = Grams
     carbs: float = Grams
     fat: float = Grams
+    fiber: float = Field(0, ge=0, le=500)
     weight_g: float = Field(0, ge=0, le=20000)
     meal_date: date = Field(default_factory=date.today)
     group_token: str | None = Field(None, max_length=64)
@@ -77,6 +81,7 @@ class MealUpdate(BaseModel):
     protein: float | None = Field(None, ge=0, le=5000)
     carbs: float | None = Field(None, ge=0, le=5000)
     fat: float | None = Field(None, ge=0, le=5000)
+    fiber: float | None = Field(None, ge=0, le=500)
     weight_g: float | None = Field(None, ge=0, le=20000)
     meal_type: Optional[MealType] = None
     meal_date: date | None = None
@@ -94,6 +99,7 @@ class MealBreakdownItem(BaseModel):
     protein: float
     carbs: float
     fat: float
+    fiber: ZeroIfNone = 0
     weight_g: float
 
 
@@ -107,6 +113,7 @@ class MealResponse(BaseModel):
     protein: float
     carbs: float
     fat: float
+    fiber: ZeroIfNone = 0
     weight_g: float
     group_token: str | None = None
     is_group: bool = False
@@ -124,6 +131,7 @@ class MealListResponse(BaseModel):
     total_protein: float
     total_carbs: float
     total_fat: float
+    total_fiber: float = 0
 
 
 class RecentFood(BaseModel):
@@ -132,6 +140,7 @@ class RecentFood(BaseModel):
     protein: float
     carbs: float
     fat: float
+    fiber: ZeroIfNone = 0
     weight_g: float
     barcode: str | None = None
     nutri_grade: str | None = None
@@ -144,6 +153,7 @@ class PresetCreate(BaseModel):
     protein: float = Grams
     carbs: float = Grams
     fat: float = Grams
+    fiber: float = Field(0, ge=0, le=500)
     description: str = Field("", max_length=500)
 
 
@@ -156,6 +166,7 @@ class PresetResponse(BaseModel):
     protein: float
     carbs: float
     fat: float
+    fiber: ZeroIfNone = 0
     description: str
 
 
@@ -174,6 +185,7 @@ class HistoryDay(BaseModel):
     total_protein: float
     total_carbs: float
     total_fat: float
+    total_fiber: float = 0
 
 
 class HistoryResponse(BaseModel):
@@ -206,6 +218,7 @@ class GoalSummary(BaseModel):
     protein: int
     carbs: int
     fat: int
+    fiber: int = 28
     water_ml: int
     bmr: float
     tdee: float

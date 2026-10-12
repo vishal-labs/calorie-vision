@@ -113,6 +113,11 @@ def macro_targets(calories: int, weight_kg: Optional[float], goal: Optional[str]
     return round(protein), round(carbs), round(fat)
 
 
+def fiber_target(calories: int) -> int:
+    """14 g of fiber per 1,000 kcal (Dietary Guidelines for Americans), never below 20 g."""
+    return max(20, round(calories * 14 / 1000))
+
+
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 1
 
@@ -123,7 +128,7 @@ SYSTEM_PROMPT = """You are a nutritional analysis assistant. You will receive an
 
 Your job is to:
 1. Identify every distinct food item visible in the image. Use the user's description to correct what you see (dish names, portion sizes, cooking oil, hidden ingredients).
-2. For each item, estimate: calories (kcal), protein (g), carbs (g), fat (g), and approximate weight (g).
+2. For each item, estimate: calories (kcal), protein (g), carbs (g), fat (g), dietary fiber (g), and approximate weight (g).
 3. Give the whole meal a short, natural name (2-6 words), e.g. "Chicken biryani with raita".
 4. Give one short, practical suggestion (max 2 sentences) that helps the user stay within their calorie budget, e.g. "If you skip X, you'd have room for Y later." Use the remaining budget if provided.
 
@@ -137,6 +142,7 @@ You MUST respond with ONLY valid JSON in this exact schema — no markdown, no e
       "protein": 0,
       "carbs": 0,
       "fat": 0,
+      "fiber": 0,
       "weight_g": 0
     }
   ],
@@ -144,7 +150,8 @@ You MUST respond with ONLY valid JSON in this exact schema — no markdown, no e
     "calories": 0,
     "protein": 0,
     "carbs": 0,
-    "fat": 0
+    "fat": 0,
+    "fiber": 0
   },
   "suggestions": "A short, helpful suggestion."
 }
@@ -354,6 +361,7 @@ def meal_breakdown_item(meal: Meal) -> dict:
         "protein": meal.protein,
         "carbs": meal.carbs,
         "fat": meal.fat,
+        "fiber": meal.fiber or 0,
         "weight_g": meal.weight_g,
     }
 
@@ -361,7 +369,7 @@ def meal_breakdown_item(meal: Meal) -> dict:
 def single_meal_response(m: Meal) -> MealResponse:
     return MealResponse(
         id=m.id, meal_date=m.meal_date, name=m.name,
-        calories=m.calories, protein=m.protein, carbs=m.carbs, fat=m.fat,
+        calories=m.calories, protein=m.protein, carbs=m.carbs, fat=m.fat, fiber=m.fiber or 0,
         weight_g=m.weight_g, group_token=m.group_token, is_group=False, items=None,
         meal_type=m.meal_type, source=m.source, barcode=m.barcode,
         nutri_grade=m.nutri_grade, created_at=m.created_at,
@@ -403,6 +411,7 @@ def build_meal_list(meals: list[Meal]) -> tuple[list[MealResponse], dict]:
             protein=sum(x.protein for x in g),
             carbs=sum(x.carbs for x in g),
             fat=sum(x.fat for x in g),
+            fiber=sum(x.fiber or 0 for x in g),
             weight_g=sum(x.weight_g for x in g),
             group_token=m.group_token,
             is_group=True,
@@ -417,6 +426,7 @@ def build_meal_list(meals: list[Meal]) -> tuple[list[MealResponse], dict]:
         "total_protein": sum(m.protein for m in meals),
         "total_carbs": sum(m.carbs for m in meals),
         "total_fat": sum(m.fat for m in meals),
+        "total_fiber": sum(m.fiber or 0 for m in meals),
     }
     return out, totals
 
@@ -487,7 +497,7 @@ async def recent_foods(
             continue
         seen[key] = RecentFood(
             name=m.name, calories=m.calories, protein=m.protein, carbs=m.carbs,
-            fat=m.fat, weight_g=m.weight_g, barcode=m.barcode,
+            fat=m.fat, fiber=m.fiber or 0, weight_g=m.weight_g, barcode=m.barcode,
             nutri_grade=m.nutri_grade, times_logged=1,
         )
     return list(seen.values())
@@ -758,6 +768,7 @@ async def get_goals(
         protein=protein,
         carbs=carbs,
         fat=fat,
+        fiber=fiber_target(calories),
         water_ml=water_ml,
         bmr=bmr,
         tdee=tdee,
@@ -869,6 +880,7 @@ async def export_data(
             "protein": m.protein,
             "carbs": m.carbs,
             "fat": m.fat,
+            "fiber": m.fiber,
             "weight_g": m.weight_g,
             "meal_date": m.meal_date.isoformat(),
             "meal_type": m.meal_type,
@@ -891,6 +903,7 @@ async def export_data(
             "protein": p.protein,
             "carbs": p.carbs,
             "fat": p.fat,
+            "fiber": p.fiber,
             "description": p.description,
         }
         for p in presets_result.scalars().all()
@@ -1020,6 +1033,7 @@ async def import_data(
                 protein=validate_numeric(meal_data.get("protein"), "protein", 5000),
                 carbs=validate_numeric(meal_data.get("carbs"), "carbs", 5000),
                 fat=validate_numeric(meal_data.get("fat"), "fat", 5000),
+                fiber=validate_numeric(meal_data.get("fiber"), "fiber", 500),
                 weight_g=validate_numeric(meal_data.get("weight_g"), "weight_g"),
                 group_token=group_token,
                 group_name=import_text(meal_data.get("group_name"), "", 200) or None,
@@ -1041,6 +1055,7 @@ async def import_data(
                 protein=validate_numeric(preset_data.get("protein"), "protein", 5000),
                 carbs=validate_numeric(preset_data.get("carbs"), "carbs", 5000),
                 fat=validate_numeric(preset_data.get("fat"), "fat", 5000),
+                fiber=validate_numeric(preset_data.get("fiber"), "fiber", 500),
                 description=import_text(preset_data.get("description"), "", 500),
             ))
         await db.flush()
@@ -1198,6 +1213,7 @@ class FoodItem(BaseModel):
     protein: float
     carbs: float
     fat: float
+    fiber: float = 0
     weight_g: float
 
 
@@ -1234,9 +1250,10 @@ def normalize_analysis(raw: dict) -> dict:
             "protein": round(_to_float(it.get("protein")), 1),
             "carbs": round(_to_float(it.get("carbs")), 1),
             "fat": round(_to_float(it.get("fat")), 1),
+            "fiber": round(min(_to_float(it.get("fiber") or it.get("fibre")), 500), 1),
             "weight_g": round(_to_float(it.get("weight_g") or it.get("weight"))),
         })
-    total = {k: round(sum(i[k] for i in items), 1) for k in ("calories", "protein", "carbs", "fat")}
+    total = {k: round(sum(i[k] for i in items), 1) for k in ("calories", "protein", "carbs", "fat", "fiber")}
     suggestion = raw.get("suggestions") or raw.get("suggestion") or ""
     if isinstance(suggestion, list):
         suggestion = " ".join(str(s) for s in suggestion)
@@ -1362,7 +1379,7 @@ TEXT_SYSTEM_PROMPT = """You are a nutritional analysis assistant. The user descr
 
 Your job is to:
 1. Split the description into distinct food or drink items, keeping the user's quantity for each.
-2. For each item, estimate calories (kcal), protein (g), carbs (g), fat (g) and weight (g, or ml for drinks) for the stated quantity. If no quantity is given, assume one typical single serving.
+2. For each item, estimate calories (kcal), protein (g), carbs (g), fat (g), dietary fiber (g) and weight (g, or ml for drinks) for the stated quantity. If no quantity is given, assume one typical single serving.
 3. Name each item with its quantity so the user can check it, e.g. "Roti (2)", "Dal tadka (1 bowl, ~200 g)", "Paneer butter masala (100 g)".
 4. Give the whole meal a short, natural name (2-6 words).
 5. Give one short, practical suggestion (max 2 sentences) that helps the user stay within their calorie budget. Use the remaining budget if provided.
@@ -1373,9 +1390,9 @@ You MUST respond with ONLY valid JSON in this exact schema — no markdown, no e
 {
   "meal_name": "Short meal name",
   "items": [
-    {"name": "Item (quantity)", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "weight_g": 0}
+    {"name": "Item (quantity)", "calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0, "weight_g": 0}
   ],
-  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0},
+  "total": {"calories": 0, "protein": 0, "carbs": 0, "fat": 0, "fiber": 0},
   "suggestions": "A short, helpful suggestion."
 }
 If the text contains no food at all, return an empty items list and say so in suggestions."""

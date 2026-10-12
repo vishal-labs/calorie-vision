@@ -90,7 +90,7 @@
         constructor(message, status) { super(message); this.status = status; }
     }
 
-    const FIELD_NAMES = { name: "Name", calories: "Calories", protein: "Protein", carbs: "Carbs", fat: "Fat",
+    const FIELD_NAMES = { name: "Name", calories: "Calories", protein: "Protein", carbs: "Carbs", fat: "Fat", fiber: "Fiber",
         weight_g: "Weight", username: "Username", password: "Password", new_password: "New password",
         daily_calories: "Budget", height_cm: "Height", weight_kg: "Weight", age: "Age" };
 
@@ -535,6 +535,13 @@
                 <span class="macro-val">${fmt(m.val)}<small>/ ${fmt(m.goal)} g</small></span>
                 <span class="macro-bar"><span style="width:${clamp((m.val / Math.max(m.goal, 1)) * 100, 0, 100)}%"></span></span>
             </div>`).join("");
+
+        const fiber = day.total_fiber || 0;
+        const fiberGoal = goals.fiber || 28;
+        $("fiber-row").innerHTML = `
+            <span class="fiber-name">Fiber</span>
+            <span class="fiber-bar"><span style="width:${clamp((fiber / fiberGoal) * 100, 0, 100)}%"></span></span>
+            <span class="fiber-val"><strong>${fmt(fiber)}</strong> / ${fmt(fiberGoal)} g</span>`;
     }
 
     function renderWater() {
@@ -552,7 +559,7 @@
         if (m.nutri_grade) parts.push(nsMini(m.nutri_grade));
         if (m.is_group) parts.push(`<span class="tag">${icon("sparkle")}${m.items.length} items</span>`);
         else if (m.source === "ai") parts.push(`<span class="tag">${icon("sparkle")}AI</span>`);
-        parts.push(`<span>P ${fmt(m.protein)} · C ${fmt(m.carbs)} · F ${fmt(m.fat)}</span>`);
+        parts.push(`<span>P ${fmt(m.protein)} · C ${fmt(m.carbs)} · F ${fmt(m.fat)}${m.fiber ? ` · Fiber ${fmt(m.fiber)}` : ""}</span>`);
         return parts.join("");
     }
 
@@ -713,10 +720,11 @@
                     <label class="field"><span class="field-label">Amount <span class="muted">optional</span></span>
                         <span class="input-unit"><input class="input" name="weight_g" inputmode="decimal" value="${v(f.weight_g || "")}" placeholder="—"><span>g</span></span></label>
                 </div>
-                <div class="grid-3">
+                <div class="grid-2">
                     <label class="field"><span class="field-label">Protein</span><span class="input-unit"><input class="input" name="protein" inputmode="decimal" value="${v(f.protein)}" placeholder="0"><span>g</span></span></label>
                     <label class="field"><span class="field-label">Carbs</span><span class="input-unit"><input class="input" name="carbs" inputmode="decimal" value="${v(f.carbs)}" placeholder="0"><span>g</span></span></label>
                     <label class="field"><span class="field-label">Fat</span><span class="input-unit"><input class="input" name="fat" inputmode="decimal" value="${v(f.fat)}" placeholder="0"><span>g</span></span></label>
+                    <label class="field"><span class="field-label">Fiber</span><span class="input-unit"><input class="input" name="fiber" inputmode="decimal" value="${v(f.fiber)}" placeholder="0"><span>g</span></span></label>
                 </div>
                 ${mealType !== undefined ? `<div><p class="field-row-label">Meal</p>${mealTypeSeg(mealType)}</div>` : ""}
                 ${showPresetToggle ? '<label class="check"><input type="checkbox" name="save_preset"> Also save to My foods</label>' : ""}
@@ -735,7 +743,7 @@
         if (calories === null || calories < 0) return fail("Enter the calories as a number.");
         if (calories > 20000) return fail("That's more than 20,000 kcal. Check the number.");
         const out = { name, calories };
-        for (const k of ["protein", "carbs", "fat", "weight_g"]) {
+        for (const k of ["protein", "carbs", "fat", "fiber", "weight_g"]) {
             const raw = String(fd.get(k) ?? "").trim();
             const n = raw === "" ? 0 : num(raw);
             if (n === null || n < 0) return fail(`${FIELD_NAMES[k]} must be a positive number.`);
@@ -846,7 +854,7 @@
                         const { save_preset, ...meal } = food;
                         const mealType = chipValue(el, "meal_type");
                         if (save_preset) {
-                            await post("/api/presets", { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat });
+                            await post("/api/presets", { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, fiber: meal.fiber || 0 });
                         }
                         const notify = await logMeals([{ ...meal, source }], { mealType, deferToast: true });
                         await back();
@@ -863,7 +871,7 @@
     async function relogRecent(food, mealType) {
         try {
             const { times_logged, ...rest } = food;
-            await logMeals([{ name: rest.name, calories: rest.calories, protein: rest.protein, carbs: rest.carbs, fat: rest.fat,
+            await logMeals([{ name: rest.name, calories: rest.calories, protein: rest.protein, carbs: rest.carbs, fat: rest.fat, fiber: rest.fiber || 0,
                 weight_g: rest.weight_g, barcode: rest.barcode || null, nutri_grade: rest.nutri_grade || null, source: "recent" }],
             { mealType: mealType || currentMealType() });
             await refreshDay();
@@ -878,8 +886,42 @@
             <span style="--c:var(--protein)"><i></i>Protein ${fmt(m.protein)} g</span>
             <span style="--c:var(--carbs)"><i></i>Carbs ${fmt(m.carbs)} g</span>
             <span style="--c:var(--fat)"><i></i>Fat ${fmt(m.fat)} g</span>
+            <span style="--c:var(--fiber)"><i></i>Fiber ${fmt(m.fiber || 0)} g</span>
             ${m.weight_g ? `<span>${fmt(m.weight_g)} g total</span>` : ""}
         </div>`;
+    }
+
+    /** Breakfast/Lunch/Dinner/Snacks chips that move a logged meal immediately. */
+    function mealMoverHtml(meal) {
+        return `<div class="meal-mover"><p class="field-row-label">Logged under</p>${mealTypeSeg(mealTypeOf(meal), "move_type")}</div>`;
+    }
+
+    function wireMealMover(el, meal) {
+        el.querySelector(".meal-mover").addEventListener("click", async (e) => {
+            const chip = e.target.closest('[data-group="move_type"]');
+            if (!chip) return;
+            const to = chip.dataset.value;
+            const from = mealTypeOf(meal);
+            if (to === from) return;
+            try {
+                if (meal.is_group) {
+                    await patch(`/api/meals/groups/${encodeURIComponent(meal.group_token)}`, { meal_type: to });
+                } else {
+                    await patch(`/api/meals/${meal.id}`, { meal_type: to });
+                }
+                meal.meal_type = to;
+                vibrate(8);
+                toast(`Moved to ${MEAL_TYPES.find((t) => t.key === to).label}`);
+                await refreshDay();
+            } catch (err) {
+                toastError(err);
+                // Put the selection back where the meal actually is.
+                el.querySelectorAll('[data-group="move_type"]').forEach((c) => {
+                    c.classList.toggle("is-on", c.dataset.value === from);
+                    c.setAttribute("aria-checked", String(c.dataset.value === from));
+                });
+            }
+        });
     }
 
     function openMealSheet(key) {
@@ -890,8 +932,9 @@
         openSheet({
             title: "Edit entry",
             body: `
+                ${mealMoverHtml(meal)}
                 ${meal.nutri_grade || meal.source ? `<div class="meal-row-meta">${mealMeta(meal)}</div>` : ""}
-                ${foodFormHtml(meal, { showPresetToggle: false, mealType: mealTypeOf(meal) })}
+                ${foodFormHtml(meal, { showPresetToggle: false })}
                 <div class="row-actions">
                     <button class="btn btn-secondary btn-sm" data-role="again">${icon("repeat")}Log again${state.date !== todayIso() ? " today" : ""}</button>
                     <button class="btn btn-secondary btn-sm" data-role="preset">${icon("star")}Save to My foods</button>
@@ -899,6 +942,7 @@
             foot: `<button class="btn btn-danger" data-role="delete" aria-label="Delete entry">${icon("trash")}</button>
                    <button class="btn btn-primary btn-grow" data-role="save">Save changes</button>`,
             onMount(el) {
+                wireMealMover(el, meal);
                 const form = el.querySelector("form");
                 el.querySelector('[data-role="save"]').addEventListener("click", async (ev) => {
                     const food = readFoodForm(form);
@@ -906,7 +950,7 @@
                     const { save_preset, ...changes } = food;
                     setBusy(ev.currentTarget, true);
                     try {
-                        await patch(`/api/meals/${meal.id}`, { ...changes, meal_type: chipValue(el, "meal_type") });
+                        await patch(`/api/meals/${meal.id}`, changes);
                         await back();
                         await refreshDay();
                         toast("Saved");
@@ -914,7 +958,7 @@
                 });
                 el.querySelector('[data-role="delete"]').addEventListener("click", () => deleteMeal(meal));
                 el.querySelector('[data-role="again"]').addEventListener("click", async () => {
-                    const copy = { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat,
+                    const copy = { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, fiber: meal.fiber || 0,
                         weight_g: meal.weight_g, barcode: meal.barcode, nutri_grade: meal.nutri_grade, source: "recent", meal_date: todayIso() };
                     try {
                         await post("/api/meals", { ...copy, meal_type: guessMealType() });
@@ -925,7 +969,7 @@
                 });
                 el.querySelector('[data-role="preset"]').addEventListener("click", async (ev) => {
                     try {
-                        await post("/api/presets", { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat });
+                        await post("/api/presets", { name: meal.name, calories: meal.calories, protein: meal.protein, carbs: meal.carbs, fat: meal.fat, fiber: meal.fiber || 0 });
                         ev.currentTarget.disabled = true;
                         ev.currentTarget.innerHTML = `${icon("check")}Saved to My foods`;
                     } catch (e) { toastError(e); }
@@ -941,7 +985,7 @@
                 <span class="item-kcal">${fmt(item.calories)}</span>
                 <button class="item-remove" data-role="remove-item" data-id="${item.id}" aria-label="Remove ${esc(item.name)}">${icon("trash")}</button>
             </div>
-            <div class="item-macros"><span><b>P</b> ${fmt(item.protein)}</span><span><b>C</b> ${fmt(item.carbs)}</span><span><b>F</b> ${fmt(item.fat)}</span>${item.weight_g ? `<span class="p">${fmt(item.weight_g)} g</span>` : ""}</div>
+            <div class="item-macros"><span><b>P</b> ${fmt(item.protein)}</span><span><b>C</b> ${fmt(item.carbs)}</span><span><b>F</b> ${fmt(item.fat)}</span>${item.fiber ? `<span><b>Fiber</b> ${fmt(item.fiber)}</span>` : ""}${item.weight_g ? `<span class="p">${fmt(item.weight_g)} g</span>` : ""}</div>
         </li>`;
     }
 
@@ -950,11 +994,11 @@
             replace,
             title: "Meal",
             body: `
+                ${mealMoverHtml(meal)}
                 <label class="field"><span class="field-label">Name</span>
                     <input class="input" data-role="gname" maxlength="200" value="${esc(meal.name)}"></label>
                 <div class="detail-total"><span class="big-num">${fmt(meal.calories)}</span><span class="hero-caption">kcal</span></div>
                 ${detailMacros(meal)}
-                <div><p class="field-row-label">Meal</p>${mealTypeSeg(mealTypeOf(meal))}</div>
                 <div>
                     <p class="field-row-label">Items · tap one to fix it</p>
                     <ul class="item-list">${meal.items.map(groupItemRow).join("")}</ul>
@@ -962,12 +1006,12 @@
             foot: `<button class="btn btn-danger" data-role="delete" aria-label="Delete meal">${icon("trash")}</button>
                    <button class="btn btn-primary btn-grow" data-role="save">Save</button>`,
             onMount(el) {
+                wireMealMover(el, meal);
                 el.querySelector('[data-role="save"]').addEventListener("click", async (ev) => {
                     setBusy(ev.currentTarget, true);
                     try {
                         await patch(`/api/meals/groups/${encodeURIComponent(meal.group_token)}`, {
                             group_name: el.querySelector('[data-role="gname"]').value.trim() || null,
-                            meal_type: chipValue(el, "meal_type"),
                         });
                         await back();
                         await refreshDay();
@@ -990,7 +1034,7 @@
                             onAction: async () => {
                                 // Restore as a standalone entry next to the meal.
                                 await post("/api/meals", { name: item.name, calories: item.calories, protein: item.protein, carbs: item.carbs,
-                                    fat: item.fat, weight_g: item.weight_g, meal_date: state.date, meal_type: mealTypeOf(meal), source: "ai" });
+                                    fat: item.fat, fiber: item.fiber || 0, weight_g: item.weight_g, meal_date: state.date, meal_type: mealTypeOf(meal), source: "ai" });
                                 await refreshDay();
                             },
                         });
@@ -1014,7 +1058,7 @@
                 const form = el.querySelector("form");
                 el.querySelectorAll('[data-role="scale"]').forEach((b) => b.addEventListener("click", () => {
                     const f = parseFloat(b.dataset.f);
-                    for (const k of ["calories", "protein", "carbs", "fat", "weight_g"]) {
+                    for (const k of ["calories", "protein", "carbs", "fat", "fiber", "weight_g"]) {
                         const input = form.elements[k];
                         const v = num(input.value);
                         if (v !== null) input.value = r1(v * f);
@@ -1052,12 +1096,12 @@
                         const base = { meal_date: snapshot.meal_date, meal_type: mealTypeOf(snapshot) };
                         if (snapshot.is_group) {
                             await post("/api/meals/batch", {
-                                meals: snapshot.items.map((i) => ({ name: i.name, calories: i.calories, protein: i.protein, carbs: i.carbs, fat: i.fat, weight_g: i.weight_g, ...base, source: snapshot.source || "ai" })),
+                                meals: snapshot.items.map((i) => ({ name: i.name, calories: i.calories, protein: i.protein, carbs: i.carbs, fat: i.fat, fiber: i.fiber || 0, weight_g: i.weight_g, ...base, source: snapshot.source || "ai" })),
                                 group_name: snapshot.name, meal_type: base.meal_type,
                             });
                         } else {
                             await post("/api/meals", { name: snapshot.name, calories: snapshot.calories, protein: snapshot.protein, carbs: snapshot.carbs,
-                                fat: snapshot.fat, weight_g: snapshot.weight_g, source: snapshot.source, barcode: snapshot.barcode, nutri_grade: snapshot.nutri_grade, ...base });
+                                fat: snapshot.fat, fiber: snapshot.fiber || 0, weight_g: snapshot.weight_g, source: snapshot.source, barcode: snapshot.barcode, nutri_grade: snapshot.nutri_grade, ...base });
                         }
                         await refreshDay();
                     } catch (e) { toastError(e); }
@@ -1200,7 +1244,7 @@
 
     function scaledItem(it) {
         const f = it.factor;
-        return { name: it.name, calories: r1(it.calories * f), protein: r1(it.protein * f), carbs: r1(it.carbs * f), fat: r1(it.fat * f), weight_g: Math.round(it.weight_g * f) };
+        return { name: it.name, calories: r1(it.calories * f), protein: r1(it.protein * f), carbs: r1(it.carbs * f), fat: r1(it.fat * f), fiber: r1((it.fiber || 0) * f), weight_g: Math.round(it.weight_g * f) };
     }
 
     function openResults() {
@@ -1211,8 +1255,8 @@
     function renderResults() {
         const a = state.analysis;
         const items = a.items.map(scaledItem);
-        const total = items.reduce((t, i) => ({ calories: t.calories + i.calories, protein: t.protein + i.protein, carbs: t.carbs + i.carbs, fat: t.fat + i.fat, weight_g: t.weight_g + i.weight_g }),
-            { calories: 0, protein: 0, carbs: 0, fat: 0, weight_g: 0 });
+        const total = items.reduce((t, i) => ({ calories: t.calories + i.calories, protein: t.protein + i.protein, carbs: t.carbs + i.carbs, fat: t.fat + i.fat, fiber: t.fiber + i.fiber, weight_g: t.weight_g + i.weight_g }),
+            { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0, weight_g: 0 });
         let after = "";
         if (state.goals && state.day) {
             const left = state.goals.calories - state.day.total_calories - total.calories;
@@ -1247,7 +1291,7 @@
                             <button class="item-remove" data-action="result-remove" data-index="${idx}" aria-label="Remove ${esc(it.name)}">${icon("trash")}</button>
                         </div>
                         <div class="item-bottom">
-                            <span class="item-macros"><span><b>P</b> ${fmt(s.protein)}</span><span><b>C</b> ${fmt(s.carbs)}</span><span><b>F</b> ${fmt(s.fat)}</span></span>
+                            <span class="item-macros"><span><b>P</b> ${fmt(s.protein)}</span><span><b>C</b> ${fmt(s.carbs)}</span><span><b>F</b> ${fmt(s.fat)}</span>${s.fiber ? `<span><b>Fiber</b> ${fmt(s.fiber)}</span>` : ""}</span>
                             <span class="portion">
                                 <button data-action="result-portion" data-index="${idx}" data-step="-0.25" aria-label="Less ${esc(it.name)}">${icon("minus")}</button>
                                 <span>${amount}</span>
@@ -1493,7 +1537,7 @@
     function productPortion(p) {
         const f = p.grams / 100;
         const n = p.per_100g;
-        return { calories: (n.calories || 0) * f, protein: (n.protein || 0) * f, carbs: (n.carbs || 0) * f, fat: (n.fat || 0) * f };
+        return { calories: (n.calories || 0) * f, protein: (n.protein || 0) * f, carbs: (n.carbs || 0) * f, fat: (n.fat || 0) * f, fiber: (n.fiber || 0) * f };
     }
 
     function renderProduct(keepScroll = false) {
@@ -1586,7 +1630,8 @@
         $("product-macros").innerHTML = `
             <span style="--c:var(--protein)"><i></i>Protein ${r1(n.protein)} g</span>
             <span style="--c:var(--carbs)"><i></i>Carbs ${r1(n.carbs)} g</span>
-            <span style="--c:var(--fat)"><i></i>Fat ${r1(n.fat)} g</span>`;
+            <span style="--c:var(--fat)"><i></i>Fat ${r1(n.fat)} g</span>
+            <span style="--c:var(--fiber)"><i></i>Fiber ${r1(n.fiber)} g</span>`;
         const btn = $("product-log");
         btn.textContent = `Log ${fmt(n.calories)} kcal`;
         btn.disabled = !(p.grams > 0);
@@ -1600,7 +1645,7 @@
         try {
             const notify = await logMeals([{
                 name: p.brand && !p.name.toLowerCase().includes(p.brand.toLowerCase()) ? `${p.name} (${p.brand})` : p.name,
-                calories: r1(n.calories), protein: r1(n.protein), carbs: r1(n.carbs), fat: r1(n.fat),
+                calories: r1(n.calories), protein: r1(n.protein), carbs: r1(n.carbs), fat: r1(n.fat), fiber: r1(n.fiber),
                 weight_g: Math.round(p.grams), source: "barcode", barcode: p.barcode.length > 14 ? null : p.barcode,
                 nutri_grade: p.nutriscore.grade || null,
             }], { mealType: chipValue($("screen-product"), "product_meal_type") || p.mealType, deferToast: true });
@@ -1642,7 +1687,7 @@
             for (let i = days - 1; i >= 0; i--) {
                 const iso = addDays(todayIso(), -i);
                 const d = byDate[iso];
-                series.push({ date: iso, kcal: d ? d.total_calories : 0, logged: !!d, p: d ? d.total_protein : 0, c: d ? d.total_carbs : 0, f: d ? d.total_fat : 0 });
+                series.push({ date: iso, kcal: d ? d.total_calories : 0, logged: !!d, p: d ? d.total_protein : 0, c: d ? d.total_carbs : 0, f: d ? d.total_fat : 0, fb: d ? d.total_fiber || 0 : 0 });
             }
             const logged = series.filter((d) => d.logged);
             const avg = logged.length ? logged.reduce((s, d) => s + d.kcal, 0) / logged.length : 0;
@@ -1690,12 +1735,13 @@
                         <span><i style="--c:var(--carbs)"></i>Carbs ${pct(cK)}%</span>
                         <span><i style="--c:var(--fat)"></i>Fat ${pct(fK)}%</span>
                     </div>
+                    <p class="chart-sub" style="margin:12px 0 0">Fiber: <strong style="color:var(--ink)">${fmt(logged.reduce((s, d) => s + d.fb, 0) / logged.length)} g</strong> a day on average, target ${fmt(goals.fiber || 28)} g.</p>
                 </section>` : ""}
                 <section>
                     <h2 class="section-label">Days</h2>
                     <ul class="day-list">${logged.slice().reverse().map((d) => `
                         <li><button class="day-item" data-action="goto-day" data-date="${d.date}">
-                            <span class="day-item-date">${esc(dayLabel(d.date))}<small>P ${fmt(d.p)} · C ${fmt(d.c)} · F ${fmt(d.f)}</small></span>
+                            <span class="day-item-date">${esc(dayLabel(d.date))}<small>P ${fmt(d.p)} · C ${fmt(d.c)} · F ${fmt(d.f)} · Fiber ${fmt(d.fb)}</small></span>
                             <span class="day-item-kcal ${d.kcal > budget ? "is-over" : ""}">${fmt(d.kcal)} kcal${d.kcal > budget ? " · over" : ""}</span>
                             ${icon("chev-right")}
                         </button></li>`).join("")}</ul>
@@ -1792,7 +1838,7 @@
             <li class="food-row">
                 <button class="food-row-main" data-action="food-open" data-kind="${kind}" data-index="${i}">
                     <span class="food-row-name">${esc(f.name)}</span>
-                    <span class="food-row-meta">${f.nutri_grade ? nsMini(f.nutri_grade) : ""}<span>${fmt(f.calories)} kcal · P ${fmt(f.protein)} · C ${fmt(f.carbs)} · F ${fmt(f.fat)}</span>${f.times_logged > 1 ? `<span>· ${f.times_logged}×</span>` : ""}</span>
+                    <span class="food-row-meta">${f.nutri_grade ? nsMini(f.nutri_grade) : ""}<span>${fmt(f.calories)} kcal · P ${fmt(f.protein)} · C ${fmt(f.carbs)} · F ${fmt(f.fat)}${f.fiber ? ` · Fiber ${fmt(f.fiber)}` : ""}</span>${f.times_logged > 1 ? `<span>· ${f.times_logged}×</span>` : ""}</span>
                 </button>
                 <button class="food-add" data-action="food-log" data-kind="${kind}" data-index="${i}" aria-label="Log ${esc(f.name)}">${icon("plus")}</button>
             </li>`;
@@ -1818,7 +1864,8 @@
             el.querySelector('[data-role="macros"]').innerHTML = `
                 <span style="--c:var(--protein)"><i></i>Protein ${r1(f.protein * factor)} g</span>
                 <span style="--c:var(--carbs)"><i></i>Carbs ${r1(f.carbs * factor)} g</span>
-                <span style="--c:var(--fat)"><i></i>Fat ${r1(f.fat * factor)} g</span>`;
+                <span style="--c:var(--fat)"><i></i>Fat ${r1(f.fat * factor)} g</span>
+                <span style="--c:var(--fiber)"><i></i>Fiber ${r1((f.fiber || 0) * factor)} g</span>`;
             el.querySelector('[data-role="log"]').textContent = `Log ${fmt(f.calories * factor)} kcal`;
         };
         openSheet({
@@ -1843,7 +1890,7 @@
                     setBusy(ev.currentTarget, true);
                     try {
                         const notify = await logMeals([{ name: f.name, calories: r1(f.calories * factor), protein: r1(f.protein * factor), carbs: r1(f.carbs * factor),
-                            fat: r1(f.fat * factor), weight_g: Math.round((f.weight_g || 0) * factor), barcode: f.barcode || null,
+                            fat: r1(f.fat * factor), fiber: r1((f.fiber || 0) * factor), weight_g: Math.round((f.weight_g || 0) * factor), barcode: f.barcode || null,
                             nutri_grade: f.nutri_grade || null, source: kind === "preset" ? "preset" : "recent" }], { mealType: chipValue(el, "meal_type"), deferToast: true });
                         await back();
                         notify();
@@ -1874,7 +1921,7 @@
                     const food = readFoodForm(form);
                     if (!food) return;
                     try {
-                        await post("/api/presets", { name: food.name, calories: food.calories, protein: food.protein, carbs: food.carbs, fat: food.fat });
+                        await post("/api/presets", { name: food.name, calories: food.calories, protein: food.protein, carbs: food.carbs, fat: food.fat, fiber: food.fiber || 0 });
                         await back();
                         await renderFoods(true);
                         toast(`Saved ${food.name}`);
@@ -1911,10 +1958,11 @@
                     </div>
                     ${rec && Math.abs(rec - goals.calories) >= 25 ? `<div class="recommend"><span>Your profile suggests <strong>${fmt(rec)} kcal</strong></span>
                         <button class="btn btn-sm btn-primary" data-action="use-recommended" data-kcal="${rec}">Use it</button></div>` : ""}
-                    <dl class="kv">
+                    <dl class="kv kv-4">
                         <div><dt>Protein</dt><dd>${fmt(goals.protein)} g</dd></div>
                         <div><dt>Carbs</dt><dd>${fmt(goals.carbs)} g</dd></div>
                         <div><dt>Fat</dt><dd>${fmt(goals.fat)} g</dd></div>
+                        <div><dt>Fiber</dt><dd>${fmt(goals.fiber || 28)} g</dd></div>
                     </dl>
                 </section>
 
