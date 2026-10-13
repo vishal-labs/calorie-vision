@@ -61,6 +61,7 @@ Where the build differs from the brief above, the reasons are given.
 - [x] **Type it in**: for meals you didn't photograph, describe them in one field (items and quantities). The AI fills in each item's macros on the same review screen, and you log it, including to earlier days.
 - [x] Fiber tracked alongside protein, carbs and fat (AI estimates it too), with a daily target.
 - [x] Logged meals can be moved between breakfast, lunch, dinner and snacks in one tap.
+- [x] Calories burned from a watch (Active or Total) and a **Balance** view with net, deficit/surplus and a 7-day chart; weight tracking; favourite meals; moving meals between days.
 - [x] Daily limit, set and changed in the **You** tab, with a suggested target from height/weight/age/activity/goal. Today shows calories left, or a clear over-budget state.
 - [x] Dark, minimal, mobile-first UI with constant feedback: loading states, toasts with Undo, haptics. Extras: water tracking, meal types, earlier days, Progress charts, My foods.
 
@@ -78,4 +79,4 @@ Where the build differs from the brief above, the reasons are given.
 - [x] Password reset without email: a one-hour code is written to the server log for the owner to hand over (`docker compose logs app | grep "reset code"`).
 
 ### Tests
-- [x] 146 backend tests (pytest), plus a Playwright end-to-end run (`scripts/e2e.py`) covering every main flow on a phone-sized screen, including a real barcode scan through the camera.
+- [x] 160 backend tests (pytest), plus a Playwright end-to-end run (`scripts/e2e.py`) covering every main flow on a phone-sized screen, including a real barcode scan through the camera.

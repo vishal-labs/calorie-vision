@@ -23,17 +23,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, func
 
 from database import DB, init_db, async_session
-from models import User, Meal, Preset, Budget, UserProfile, WaterLog
+from models import User, Meal, Preset, Budget, UserProfile, WaterLog, ActivityLog, WeightLog
 from schemas import (
     RegisterRequest, LoginRequest, ChangePasswordRequest, AuthResponse,
     MealCreate, MealBatchCreate, MealUpdate, MealGroupUpdate, MealResponse, MealListResponse,
-    RecentFood, PresetCreate, PresetResponse,
+    RecentFood, PresetCreate, PresetResponse, PresetItem,
     BudgetResponse, BudgetUpdate, HistoryResponse, HistoryDay,
     ProfileUpdate, ProfileResponse, GoalSummary,
     ForgotPasswordRequest, ResetPasswordRequest, WaterUpdate, WaterResponse,
+    ActivityCreate, ActivityUpdate, ActivityResponse, BalanceDay, BalanceResponse, BalanceHistory,
+    WeightUpsert, WeightEntry, WeightHistory,
 )
 from auth import (
     hash_password, verify_password, create_token, load_jwt_secret,
@@ -581,6 +583,8 @@ async def update_meal_group(
             m.group_name = (updates["group_name"] or "").strip() or None
         if updates.get("meal_type"):
             m.meal_type = updates["meal_type"]
+        if updates.get("meal_date"):
+            m.meal_date = updates["meal_date"]
     await db.flush()
     return {"message": "Meal updated"}
 
@@ -627,7 +631,13 @@ async def create_preset(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = DB,
 ):
-    record = Preset(user_id=current_user.id, **preset.model_dump())
+    data = preset.model_dump()
+    items = data.pop("items", None)
+    if items:
+        for key in ("calories", "protein", "carbs", "fat", "fiber"):
+            data[key] = round(sum(i[key] for i in items), 1)
+        data["items"] = json.dumps(items)
+    record = Preset(user_id=current_user.id, **data)
     db.add(record)
     await db.flush()
     await db.refresh(record)
@@ -821,6 +831,252 @@ async def add_water(
 
 
 # ══════════════════════════════════════════════
+# CALORIES BURNED & ENERGY BALANCE
+# ══════════════════════════════════════════════
+
+def compute_balance(day: datetime.date, eaten: float, active: float, total: float,
+                    bmr: Optional[float], budget: int) -> dict:
+    """Energy balance for one day.
+
+    Watches report either *active* calories (exercise/movement only, e.g. Apple
+    Watch's Move ring) or *total* calories (including resting burn, e.g. Fitbit's
+    headline number). A logged total is used as-is; otherwise resting burn is
+    estimated from the profile's BMR when available.
+    """
+    resting = None
+    burned = None
+    if total > 0:
+        basis, burned = "total", total
+    elif active > 0 and bmr:
+        basis, resting = "bmr_plus_active", round(bmr)
+        burned = resting + active
+    elif active > 0:
+        basis = "active_only"
+    else:
+        basis = "none"
+    logged = total if total > 0 else active
+    return {
+        "date": day,
+        "eaten": round(eaten, 1),
+        "active": round(active, 1),
+        "total_logged": round(total, 1),
+        "budget": budget,
+        "basis": basis,
+        "resting_estimate": resting,
+        "burned": round(burned, 1) if burned is not None else None,
+        "balance": round(eaten - burned, 1) if burned is not None else None,
+        "net": round(eaten - logged, 1),
+        "budget_with_exercise": round(budget + active, 1),
+        "left_with_exercise": round(budget + active - eaten, 1),
+    }
+
+
+async def user_bmr(db: AsyncSession, user: User) -> Optional[float]:
+    profile = await get_profile_row(db, user)
+    if not profile:
+        return None
+    return calculate_bmr(profile.weight_kg, profile.height_cm, profile.age, profile.gender)
+
+
+async def get_owned_activity(db: AsyncSession, activity_id: int, user: User) -> ActivityLog:
+    result = await db.execute(
+        select(ActivityLog).where(ActivityLog.id == activity_id, ActivityLog.user_id == user.id)
+    )
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return row
+
+
+@app.post("/api/activity", response_model=ActivityResponse, status_code=201)
+async def add_activity(
+    data: ActivityCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    row = ActivityLog(user_id=current_user.id, **data.model_dump())
+    if row.note is not None:
+        row.note = row.note.strip() or None
+    db.add(row)
+    await db.flush()
+    await db.refresh(row)
+    return ActivityResponse.model_validate(row)
+
+
+@app.patch("/api/activity/{activity_id}", response_model=ActivityResponse)
+async def update_activity(
+    activity_id: int,
+    data: ActivityUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    row = await get_owned_activity(db, activity_id, current_user)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is not None or field == "note":
+            setattr(row, field, value)
+    await db.flush()
+    await db.refresh(row)
+    return ActivityResponse.model_validate(row)
+
+
+@app.delete("/api/activity/{activity_id}")
+async def delete_activity(
+    activity_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    row = await get_owned_activity(db, activity_id, current_user)
+    await db.delete(row)
+    return {"message": "Deleted"}
+
+
+@app.get("/api/balance", response_model=BalanceResponse)
+async def get_balance(
+    date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """Eaten vs burned for one day, with the activity entries behind it."""
+    day = parse_date(date)
+    eaten = (await db.execute(
+        select(func.coalesce(func.sum(Meal.calories), 0)).where(Meal.user_id == current_user.id, Meal.meal_date == day)
+    )).scalar_one()
+    rows = (await db.execute(
+        select(ActivityLog).where(ActivityLog.user_id == current_user.id, ActivityLog.log_date == day)
+        .order_by(ActivityLog.created_at, ActivityLog.id)
+    )).scalars().all()
+    active = sum(r.calories for r in rows if r.kind == "active")
+    total = sum(r.calories for r in rows if r.kind == "total")
+    budget = await get_or_create_budget(db, current_user)
+    day_balance = compute_balance(day, float(eaten), active, total, await user_bmr(db, current_user), budget.daily_calories)
+    return BalanceResponse(**day_balance, entries=[ActivityResponse.model_validate(r) for r in rows])
+
+
+@app.get("/api/balance/history", response_model=BalanceHistory)
+async def get_balance_history(
+    days: int = 7,
+    end: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """Per-day balance for every day in the window that has meals or burned calories."""
+    days = max(1, min(days, 120))
+    end_date = parse_date(end)
+    start = end_date - datetime.timedelta(days=days - 1)
+    eaten_rows = (await db.execute(
+        select(Meal.meal_date, func.sum(Meal.calories))
+        .where(Meal.user_id == current_user.id, Meal.meal_date >= start, Meal.meal_date <= end_date)
+        .group_by(Meal.meal_date)
+    )).all()
+    act_rows = (await db.execute(
+        select(ActivityLog.log_date, ActivityLog.kind, func.sum(ActivityLog.calories))
+        .where(ActivityLog.user_id == current_user.id, ActivityLog.log_date >= start, ActivityLog.log_date <= end_date)
+        .group_by(ActivityLog.log_date, ActivityLog.kind)
+    )).all()
+    eaten = {d: float(v or 0) for d, v in eaten_rows}
+    burned: dict[datetime.date, dict[str, float]] = {}
+    for d, kind, v in act_rows:
+        burned.setdefault(d, {})[kind] = float(v or 0)
+    bmr = await user_bmr(db, current_user)
+    budget = (await get_or_create_budget(db, current_user)).daily_calories
+    out = []
+    for d in sorted(set(eaten) | set(burned)):
+        b = burned.get(d, {})
+        out.append(BalanceDay(**compute_balance(d, eaten.get(d, 0.0), b.get("active", 0.0), b.get("total", 0.0), bmr, budget)))
+    return BalanceHistory(days=out)
+
+
+# ══════════════════════════════════════════════
+# WEIGHT ENDPOINTS
+# ══════════════════════════════════════════════
+
+def weight_trend(rows: list[WeightLog]) -> list[WeightEntry]:
+    """Each entry with the average of all entries in the 7 days up to and including it."""
+    out = []
+    for i, r in enumerate(rows):
+        window = [x.weight_kg for x in rows[: i + 1] if (r.log_date - x.log_date).days < 7]
+        out.append(WeightEntry(log_date=r.log_date, weight_kg=r.weight_kg,
+                               trend_kg=round(sum(window) / len(window), 2)))
+    return out
+
+
+@app.get("/api/weight", response_model=WeightHistory)
+async def get_weight(
+    days: int = 90,
+    end: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    days = max(7, min(days, 730))
+    end_date = parse_date(end)
+    # Include 6 extra days so the first entries in the window have a full 7-day trend.
+    fetch_start = end_date - datetime.timedelta(days=days - 1 + 6)
+    rows = (await db.execute(
+        select(WeightLog).where(WeightLog.user_id == current_user.id,
+                                WeightLog.log_date >= fetch_start, WeightLog.log_date <= end_date)
+        .order_by(WeightLog.log_date)
+    )).scalars().all()
+    window_start = end_date - datetime.timedelta(days=days - 1)
+    entries = [e for e in weight_trend(list(rows)) if e.log_date >= window_start]
+    if not entries:
+        return WeightHistory(entries=[])
+    latest = entries[-1]
+    week_ago = [e for e in entries if (latest.log_date - e.log_date).days >= 6]
+    change_7d = round(latest.trend_kg - week_ago[-1].trend_kg, 2) if week_ago else None
+    change_range = round(latest.trend_kg - entries[0].trend_kg, 2) if len(entries) > 1 else None
+    return WeightHistory(entries=entries, latest=latest, change_7d=change_7d, change_range=change_range)
+
+
+@app.put("/api/weight", response_model=WeightEntry)
+async def log_weight(
+    data: WeightUpsert,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    """One weigh-in per day (logging again replaces it). The newest weigh-in also
+    becomes the profile weight, so BMI, targets and water goal stay current."""
+    row = (await db.execute(
+        select(WeightLog).where(WeightLog.user_id == current_user.id, WeightLog.log_date == data.log_date)
+    )).scalar_one_or_none()
+    if row is None:
+        row = WeightLog(user_id=current_user.id, log_date=data.log_date, weight_kg=data.weight_kg)
+        db.add(row)
+    row.weight_kg = round(data.weight_kg, 2)
+    await db.flush()
+
+    newest = (await db.execute(
+        select(func.max(WeightLog.log_date)).where(WeightLog.user_id == current_user.id)
+    )).scalar_one()
+    if newest == data.log_date:
+        profile = await get_profile_row(db, current_user)
+        if not profile:
+            profile = UserProfile(user_id=current_user.id)
+            db.add(profile)
+        profile.weight_kg = row.weight_kg
+        profile.bmi, profile.tdee = calculate_bmi_tdee(
+            profile.height_cm, profile.weight_kg, profile.age,
+            profile.gender, profile.activity_level, profile.goal,
+        )
+        await db.flush()
+    return WeightEntry(log_date=row.log_date, weight_kg=row.weight_kg, trend_kg=row.weight_kg)
+
+
+@app.delete("/api/weight/{log_date}")
+async def delete_weight(
+    log_date: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = DB,
+):
+    day = parse_date(log_date)
+    result = await db.execute(
+        delete(WeightLog).where(WeightLog.user_id == current_user.id, WeightLog.log_date == day)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status_code=404, detail="No weigh-in on that day")
+    return {"message": "Deleted"}
+
+
+# ══════════════════════════════════════════════
 # HISTORY ENDPOINT
 # ══════════════════════════════════════════════
 
@@ -862,6 +1118,8 @@ class ImportData(BaseModel):
     presets: Optional[list[dict]] = Field(None, max_length=5000)
     budget: Optional[dict] = None
     profile: Optional[dict] = None
+    activity: Optional[list[dict]] = Field(None, max_length=50000)
+    weight: Optional[list[dict]] = Field(None, max_length=20000)
 
 
 @app.get("/api/export")
@@ -905,9 +1163,17 @@ async def export_data(
             "fat": p.fat,
             "fiber": p.fiber,
             "description": p.description,
+            "items": json.loads(p.items) if p.items else None,
         }
         for p in presets_result.scalars().all()
     ]
+
+    activity_rows = (await db.execute(
+        select(ActivityLog).where(ActivityLog.user_id == current_user.id).order_by(ActivityLog.log_date)
+    )).scalars().all()
+    weight_rows = (await db.execute(
+        select(WeightLog).where(WeightLog.user_id == current_user.id).order_by(WeightLog.log_date)
+    )).scalars().all()
 
     budget = await get_or_create_budget(db, current_user)
     profile = await get_profile_row(db, current_user)
@@ -929,6 +1195,12 @@ async def export_data(
         "presets": presets_data,
         "budget": {"daily_calories": budget.daily_calories},
         "profile": profile_data,
+        "activity": [
+            {"log_date": a.log_date.isoformat(), "calories": a.calories, "kind": a.kind,
+             "source": a.source, "note": a.note}
+            for a in activity_rows
+        ],
+        "weight": [{"log_date": w.log_date.isoformat(), "weight_kg": w.weight_kg} for w in weight_rows],
     }
 
 
@@ -1057,10 +1329,45 @@ async def import_data(
                 fat=validate_numeric(preset_data.get("fat"), "fat", 5000),
                 fiber=validate_numeric(preset_data.get("fiber"), "fiber", 500),
                 description=import_text(preset_data.get("description"), "", 500),
+                items=import_preset_items(preset_data.get("items")),
             ))
         await db.flush()
 
+    if data.activity:
+        for a in data.activity:
+            try:
+                entry = ActivityCreate(**{k: a.get(k) for k in ("calories", "kind", "source", "note", "log_date") if a.get(k) is not None})
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid calories-burned entry in backup")
+            db.add(ActivityLog(user_id=current_user.id, **entry.model_dump()))
+        await db.flush()
+
+    if data.weight:
+        for w in data.weight:
+            try:
+                entry = WeightUpsert(**{k: w.get(k) for k in ("weight_kg", "log_date")})
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid weight entry in backup")
+            existing = (await db.execute(
+                select(WeightLog).where(WeightLog.user_id == current_user.id, WeightLog.log_date == entry.log_date)
+            )).scalar_one_or_none()
+            if existing:
+                existing.weight_kg = entry.weight_kg
+            else:
+                db.add(WeightLog(user_id=current_user.id, log_date=entry.log_date, weight_kg=entry.weight_kg))
+        await db.flush()
+
     return {"message": "Data imported successfully"}
+
+
+def import_preset_items(raw) -> Optional[str]:
+    if not raw:
+        return None
+    try:
+        items = [PresetItem(**i).model_dump() for i in raw][:30]
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid favourite meal in backup")
+    return json.dumps(items) if items else None
 
 
 # ══════════════════════════════════════════════

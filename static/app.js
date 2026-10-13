@@ -73,6 +73,10 @@
         goals: null,
         profile: null,
         range: 7,
+        todayView: store.get("cv_today_view") === "balance" ? "balance" : "food",
+        balance: null,
+        balanceWeek: null,
+        weight: null,
         recent: [],
         presets: [],
         foodsQuery: "",
@@ -451,6 +455,7 @@
         if (date !== state.date) return; // user moved on
         state.day = day;
         state.water = water;
+        if (state.todayView === "balance") await loadBalance();
         renderToday();
     }
 
@@ -485,9 +490,21 @@
     function renderToday() {
         $("day-label").textContent = dayLabel(state.date, true);
         $("day-next").disabled = state.date >= todayIso();
-        renderHero();
-        renderWater();
-        renderMealSections();
+        const balance = state.todayView === "balance";
+        $("view-food").hidden = balance;
+        $("view-balance").hidden = !balance;
+        document.querySelectorAll('[data-action="today-view"]').forEach((b) => {
+            const on = b.dataset.view === state.todayView;
+            b.classList.toggle("is-on", on);
+            b.setAttribute("aria-selected", String(on));
+        });
+        if (balance) {
+            renderBalance();
+        } else {
+            renderHero();
+            renderWater();
+            renderMealSections();
+        }
     }
 
     function renderHero() {
@@ -618,6 +635,7 @@
         if (next > todayIso()) return;
         state.date = next;
         state.day = null;
+        state.balance = null;
         renderToday();
         try { await refreshDay(); } catch (e) { toastError(e); }
     }
@@ -628,6 +646,382 @@
             state.water = await post("/api/water", { delta_ml: ml, log_date: state.date });
             renderWater();
         } catch (e) { toastError(e); }
+    }
+
+    // ══════════════════════════════════════════
+    // BALANCE (calories burned, net, weight)
+    // ══════════════════════════════════════════
+    const KCAL_PER_KG = 7700; // approx. energy in 1 kg of body fat
+    const SOURCES = [
+        { key: "apple_watch", label: "Apple Watch" },
+        { key: "fitbit", label: "Fitbit" },
+        { key: "garmin", label: "Garmin" },
+        { key: "other", label: "Other" },
+    ];
+    const sourceLabel = (k) => (SOURCES.find((x) => x.key === k) || {}).label || "Tracker";
+    const kgFrom = (kcal) => Math.abs(kcal) / KCAL_PER_KG;
+    const fmtKg = (kg) => (kg < 0.1 ? kg.toFixed(2) : kg.toFixed(1));
+    const signed = (n) => `${n > 0 ? "+" : n < 0 ? "−" : ""}${fmt(Math.abs(n))}`;
+
+    async function loadBalance() {
+        const date = state.date;
+        const [bal, week, weight] = await Promise.all([
+            get(`/api/balance?date=${date}`),
+            get(`/api/balance/history?days=7&end=${date}`),
+            get(`/api/weight?days=30&end=${date}`),
+        ]);
+        if (date !== state.date) return;
+        state.balance = bal;
+        state.balanceWeek = week.days;
+        state.weight = weight;
+    }
+
+    async function setTodayView(view) {
+        state.todayView = view;
+        store.set("cv_today_view", view);
+        renderToday();
+        if (view === "balance" && (!state.balance || state.balance.date !== state.date)) {
+            try { await loadBalance(); renderToday(); } catch (e) { toastError(e); }
+        }
+    }
+
+    function renderBalance() {
+        const root = $("view-balance");
+        const b = state.balance;
+        if (!b || b.date !== state.date) {
+            root.innerHTML = '<div class="skel" style="height:120px;margin-top:22px"></div><div class="skel" style="height:80px;margin-top:16px"></div>';
+            return;
+        }
+        const isToday = state.date === todayIso();
+        const known = b.balance !== null;
+        const deficit = known && b.balance <= 0;
+
+        let hero;
+        if (known) {
+            const kg = kgFrom(b.balance);
+            hero = `
+                <div class="hero-num">
+                    <span class="big-num">${fmt(Math.abs(b.balance))}</span>
+                    <span class="hero-caption balance-word ${deficit ? "is-deficit" : "is-surplus"}">kcal ${deficit ? "deficit" : "surplus"}</span>
+                </div>
+                <p class="balance-sub">${deficit ? "Burned" : "Ate"} more than ${deficit ? "you ate" : "you burned"}: about ${fmtKg(kg)} kg of body fat ${deficit ? "used" : "stored"}${isToday ? " so far" : ""}.</p>`;
+        } else if (b.basis === "active_only") {
+            const over = b.left_with_exercise < 0;
+            hero = `
+                <div class="hero-num">
+                    <span class="big-num ${over ? "is-over-text" : ""}">${fmt(Math.abs(b.left_with_exercise))}</span>
+                    <span class="hero-caption">kcal ${over ? "over" : "left"}, counting exercise</span>
+                </div>
+                <p class="balance-sub">Add your height, weight, age and sex in <button class="btn-text inline" data-action="tab" data-tab="me">You</button> to estimate your resting burn and see your full deficit.</p>`;
+        } else {
+            hero = `
+                <div class="hero-num">
+                    <span class="big-num muted-num">${fmt(b.eaten)}</span>
+                    <span class="hero-caption">kcal eaten${isToday ? " so far" : ""}</span>
+                </div>
+                <p class="balance-sub">At the end of the day, add the calories your watch says you burned to see your net and deficit.</p>`;
+        }
+
+        let burnedVal, burnedLabel;
+        if (b.basis === "total") { burnedVal = b.burned; burnedLabel = "Total burned"; }
+        else if (b.basis === "bmr_plus_active") { burnedVal = b.burned; burnedLabel = `${fmt(b.resting_estimate)} resting + ${fmt(b.active)} active`; }
+        else { burnedVal = b.active; burnedLabel = b.basis === "active_only" ? "Active only" : "Not logged yet"; }
+        const resultVal = known ? b.balance : b.net;
+        const equation = `
+            <div class="equation" role="group" aria-label="Eaten minus burned">
+                <div class="eq-cell"><span class="eq-val">${fmt(b.eaten)}</span><span class="eq-label">Eaten</span></div>
+                <span class="eq-op" aria-hidden="true">−</span>
+                <div class="eq-cell"><span class="eq-val">${b.basis === "none" ? "—" : fmt(burnedVal)}</span><span class="eq-label">${esc(burnedLabel)}</span></div>
+                <span class="eq-op" aria-hidden="true">=</span>
+                <div class="eq-cell"><span class="eq-val">${b.basis === "none" ? "—" : signed(resultVal)}</span><span class="eq-label">${known ? "Balance" : "Net"}</span></div>
+            </div>`;
+
+        const exercise = b.active > 0 ? `
+            <p class="exercise-line">Budget ${fmt(b.budget)} + ${fmt(b.active)} exercise = <strong>${fmt(b.budget_with_exercise)} kcal</strong>
+            · ${b.left_with_exercise >= 0 ? `${fmt(b.left_with_exercise)} left` : `<span class="is-over-text">${fmt(-b.left_with_exercise)} over</span>`}</p>` : "";
+
+        const entries = b.entries.length ? `<ul class="burn-list">${b.entries.map((e) => `
+            <li><button class="burn-row" data-action="edit-burn" data-id="${e.id}">
+                <span class="burn-icon">${icon("flame")}</span>
+                <span class="burn-main"><span class="burn-name">${esc(e.note || sourceLabel(e.source))}</span>
+                    <span class="burn-meta">${e.note ? `${esc(sourceLabel(e.source))} · ` : ""}${e.kind === "total" ? "Total, includes resting" : "Active"}</span></span>
+                <span class="burn-kcal">${fmt(e.calories)}<small>kcal</small></span>
+            </button></li>`).join("")}</ul>` : "";
+
+        root.innerHTML = `
+            <div class="hero balance-hero">${hero}</div>
+            ${b.basis === "none" ? "" : equation}
+            ${exercise}
+            <section class="balance-section">
+                <div class="meal-section-head">
+                    <h2 class="meal-section-title">Burned${isToday ? " today" : ""}</h2>
+                    ${b.entries.length ? `<span class="meal-section-kcal">${fmt(b.active + b.total_logged)} kcal</span>` : ""}
+                </div>
+                ${entries}
+                <button class="btn ${b.entries.length ? "btn-secondary" : "btn-primary"} btn-block" data-action="add-burn" style="margin-top:12px">${icon("flame")}Add calories burned</button>
+            </section>
+            ${weightCardHtml()}
+            ${weekChartHtml()}`;
+        wireWeekChart();
+    }
+
+    function weightCardHtml() {
+        const w = state.weight;
+        const latest = w && w.latest;
+        const todays = latest && latest.log_date === state.date;
+        let body;
+        if (!latest) {
+            body = '<p class="empty-note" style="padding:6px 0 0">Weigh in now and then to see whether your calorie balance shows up on the scale.</p>';
+        } else {
+            const ch = w.change_7d;
+            body = `
+                <div class="weight-now">
+                    <span class="weight-val">${latest.weight_kg.toFixed(1)}<small>kg</small></span>
+                    <span class="weight-meta">${todays ? (state.date === todayIso() ? "Today" : dayLabel(state.date)) : `Last weigh-in ${esc(dayLabel(latest.log_date).toLowerCase())}`}<br>
+                    7-day average ${latest.trend_kg.toFixed(1)} kg${ch !== null && ch !== undefined ? ` · <span class="${ch <= 0 ? "is-down" : "is-up"}">${ch > 0 ? "+" : ""}${ch.toFixed(1)} kg this week</span>` : ""}</span>
+                </div>`;
+        }
+        return `
+            <section class="balance-section">
+                <div class="meal-section-head">
+                    <h2 class="meal-section-title">Weight</h2>
+                    <button class="btn btn-ghost btn-sm" data-action="log-weight">${icon("scale")}${todays ? "Edit" : "Log weight"}</button>
+                </div>
+                ${body}
+            </section>`;
+    }
+
+    function weekSeries() {
+        const byDate = Object.fromEntries((state.balanceWeek || []).map((d) => [d.date, d]));
+        const out = [];
+        for (let i = 6; i >= 0; i--) {
+            const iso = addDays(state.date, -i);
+            const d = byDate[iso];
+            out.push({ date: iso, value: d && d.balance !== null ? d.balance : null, day: d || null });
+        }
+        return out;
+    }
+
+    function weekChartHtml() {
+        const series = weekSeries();
+        const known = series.filter((d) => d.value !== null);
+        if (!known.length) return "";
+        const sum = known.reduce((t, d) => t + d.value, 0);
+        // Split the height between surplus (up) and deficit (down) by the data,
+        // so a week of only deficits doesn't leave the top half empty.
+        const maxSurplus = Math.max(0, ...known.map((d) => d.value));
+        const maxDeficit = Math.max(0, ...known.map((d) => -d.value));
+        const range = Math.max(500, maxSurplus + maxDeficit);
+        const W = 340, H = 130, pad = 8, plot = H - 2 * pad;
+        const mid = pad + (maxSurplus / range) * plot;
+        const kcalToPx = plot / range;
+        const slot = W / 7, bw = slot - 10;
+        const bars = series.map((d, i) => {
+            const x = i * slot + 5;
+            if (d.value === null) return `<rect class="wk-empty" x="${x}" y="${mid - 1}" width="${bw}" height="2" rx="1"/>`;
+            const h = Math.max(2, Math.abs(d.value) * kcalToPx);
+            const up = d.value > 0;
+            const y = up ? mid - h : mid;
+            const r = Math.min(4, h);
+            // Rounded at the data end only.
+            const path = up
+                ? `M${x},${mid} V${y + r} Q${x},${y} ${x + r},${y} H${x + bw - r} Q${x + bw},${y} ${x + bw},${y + r} V${mid} Z`
+                : `M${x},${mid} V${mid + h - r} Q${x},${mid + h} ${x + r},${mid + h} H${x + bw - r} Q${x + bw},${mid + h} ${x + bw},${mid + h - r} V${mid} Z`;
+            return `<path class="wk-bar ${up ? "is-surplus" : "is-deficit"}" data-i="${i}" d="${path}"/>`;
+        }).join("");
+        const labels = series.map((d, i) => `<text class="axis-text" x="${i * slot + slot / 2}" y="${H + 14}" text-anchor="middle">${esc(new Date(`${d.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "narrow" }))}</text>`).join("");
+        const hits = series.map((d, i) => `<rect class="bar-hit" data-i="${i}" x="${i * slot}" y="0" width="${slot}" height="${H}"/>`).join("");
+        return `
+            <section class="balance-section chart-card">
+                <h2 class="meal-section-title">Last 7 days</h2>
+                <p class="chart-sub">Net ${sum <= 0 ? "deficit" : "surplus"} of <strong style="color:var(--ink)">${fmt(Math.abs(sum))} kcal</strong> over ${known.length} day${known.length === 1 ? "" : "s"} with calories burned logged, about ${fmtKg(kgFrom(sum))} kg.</p>
+                <div class="chart" id="week-chart">
+                    <svg viewBox="0 0 ${W} ${H + 18}" role="img" aria-label="Daily calorie balance, last 7 days">
+                        <line class="grid-line" x1="0" x2="${W}" y1="${mid}" y2="${mid}"/>
+                        ${bars}${labels}${hits}
+                    </svg>
+                </div>
+                <div class="legend">
+                    <span><i style="--c:var(--good)"></i>Deficit</span>
+                    <span><i style="--c:var(--over)"></i>Surplus</span>
+                    <span><i style="--c:var(--surface-3)"></i>No burn logged</span>
+                </div>
+            </section>`;
+    }
+
+    function wireWeekChart() {
+        const root = $("week-chart");
+        if (!root) return;
+        const series = weekSeries();
+        let tip = null;
+        const show = (i) => {
+            const d = series[i];
+            root.classList.add("has-focus");
+            root.querySelectorAll(".wk-bar").forEach((el) => el.classList.toggle("is-focus", el.dataset.i === String(i)));
+            if (!tip) { tip = document.createElement("div"); tip.className = "chart-tip"; root.appendChild(tip); }
+            tip.innerHTML = d.value === null
+                ? `${esc(dayLabel(d.date))}<br>No calories burned logged`
+                : `${esc(dayLabel(d.date))}<br><strong>${fmt(Math.abs(d.value))} kcal</strong> ${d.value <= 0 ? "deficit" : "surplus"}<br><span class="muted">${fmt(d.day.eaten)} eaten · ${fmt(d.day.burned)} burned</span>`;
+            const hit = root.querySelector(`.bar-hit[data-i="${i}"]`).getBoundingClientRect();
+            const box = root.getBoundingClientRect();
+            tip.style.left = `${clamp(hit.left + hit.width / 2 - box.left, 80, box.width - 80)}px`;
+            tip.style.top = "0px";
+        };
+        const svg = root.querySelector("svg");
+        svg.addEventListener("pointerdown", (e) => { const i = e.target.dataset && e.target.dataset.i; if (i !== undefined) show(Number(i)); });
+        svg.addEventListener("pointerover", (e) => { const i = e.target.dataset && e.target.dataset.i; if (i !== undefined) show(Number(i)); });
+        svg.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse" && tip) { tip.remove(); tip = null; root.classList.remove("has-focus"); } });
+    }
+
+    async function afterBalanceChange() {
+        await loadBalance();
+        if (state.tab === "today") renderToday();
+    }
+
+    function openBurnSheet(entry = null, { replace = false } = {}) {
+        const kind = entry ? entry.kind : (store.get("cv_burn_kind") === "total" ? "total" : "active");
+        const source = entry ? entry.source : store.get("cv_burn_source");
+        const when = state.date === todayIso() ? "" : ` · ${dayLabel(state.date)}`;
+        const help = {
+            active: "Exercise and movement only. Apple Watch: <strong>Active Energy</strong> (red Move ring). Fitbit: <strong>Activity calories</strong>.",
+            total: "Everything, including what your body burns at rest. Fitbit: the main <strong>Calories burned</strong> number. Apple Watch: Active + Resting Energy.",
+        };
+        openSheet({
+            replace,
+            title: entry ? "Edit calories burned" : `Calories burned${when}`,
+            body: `
+                <label class="field"><span class="field-label">How many calories did your watch say?</span>
+                    <span class="input-unit"><input class="input burn-input" data-role="kcal" inputmode="numeric" value="${entry ? Math.round(entry.calories) : ""}" placeholder="0" ${entry ? "" : "autofocus"}><span>kcal</span></span></label>
+                <div>
+                    <p class="field-row-label">That number is</p>
+                    <div class="seg" role="radiogroup">
+                        <button type="button" class="seg-btn ${kind === "active" ? "is-on" : ""}" data-role="kind" data-value="active">Active</button>
+                        <button type="button" class="seg-btn ${kind === "total" ? "is-on" : ""}" data-role="kind" data-value="total">Total</button>
+                    </div>
+                    <p class="muted small" data-role="kind-help" style="margin:8px 0 0">${help[kind]}</p>
+                </div>
+                <div><p class="field-row-label">From</p><div class="chips">${SOURCES.map((x) => `
+                    <button type="button" class="chip ${x.key === source ? "is-on" : ""}" data-role="source" data-value="${x.key}">${x.label}</button>`).join("")}</div></div>
+                <label class="field"><span class="field-label">Note <span class="muted">optional</span></span>
+                    <input class="input" data-role="note" maxlength="100" value="${esc(entry && entry.note ? entry.note : "")}" placeholder="e.g. Evening run"></label>
+                <p class="form-error" data-role="error" hidden></p>`,
+            foot: `${entry ? `<button class="btn btn-danger" data-role="delete" aria-label="Delete entry">${icon("trash")}</button>` : ""}
+                   <button class="btn btn-primary btn-grow" data-role="save">${entry ? "Save" : "Add"}</button>`,
+            onMount(el) {
+                let k = kind;
+                let src = source || null;
+                el.querySelectorAll('[data-role="kind"]').forEach((btn) => btn.addEventListener("click", () => {
+                    k = btn.dataset.value;
+                    el.querySelectorAll('[data-role="kind"]').forEach((x) => x.classList.toggle("is-on", x === btn));
+                    el.querySelector('[data-role="kind-help"]').innerHTML = help[k];
+                }));
+                el.querySelectorAll('[data-role="source"]').forEach((btn) => btn.addEventListener("click", () => {
+                    src = src === btn.dataset.value ? null : btn.dataset.value;
+                    el.querySelectorAll('[data-role="source"]').forEach((x) => x.classList.toggle("is-on", x.dataset.value === src));
+                }));
+                const err = el.querySelector('[data-role="error"]');
+                const save = el.querySelector('[data-role="save"]');
+                const submit = async () => {
+                    const kcal = num(el.querySelector('[data-role="kcal"]').value);
+                    if (kcal === null || kcal <= 0 || kcal > 10000) { err.textContent = "Enter the calories as a number between 1 and 10,000."; err.hidden = false; return; }
+                    const body = { calories: Math.round(kcal), kind: k, source: src, note: el.querySelector('[data-role="note"]').value.trim() || null };
+                    setBusy(save, true);
+                    try {
+                        let created = null;
+                        if (entry) await patch(`/api/activity/${entry.id}`, body);
+                        else created = await post("/api/activity", { ...body, log_date: state.date });
+                        store.set("cv_burn_kind", k);
+                        if (src) store.set("cv_burn_source", src);
+                        await back();
+                        await afterBalanceChange();
+                        if (created) {
+                            toast(`Added ${fmt(body.calories)} kcal burned`, {
+                                action: state.todayView === "balance" && state.tab === "today" ? "Undo" : "See balance",
+                                onAction: async () => {
+                                    if (state.todayView === "balance" && state.tab === "today") {
+                                        await del(`/api/activity/${created.id}`);
+                                        await afterBalanceChange();
+                                    } else {
+                                        if (state.tab !== "today") switchTab("today");
+                                        setTodayView("balance");
+                                    }
+                                },
+                            });
+                        } else toast("Saved");
+                    } catch (e) { toastError(e); setBusy(save, false); }
+                };
+                save.addEventListener("click", submit);
+                el.querySelector('[data-role="kcal"]').addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+                const delBtn = el.querySelector('[data-role="delete"]');
+                if (delBtn) delBtn.addEventListener("click", async () => {
+                    try {
+                        await del(`/api/activity/${entry.id}`);
+                        await back();
+                        await afterBalanceChange();
+                        toast("Deleted", {
+                            action: "Undo",
+                            onAction: async () => {
+                                await post("/api/activity", { calories: entry.calories, kind: entry.kind, source: entry.source, note: entry.note, log_date: entry.log_date });
+                                await afterBalanceChange();
+                            },
+                        });
+                    } catch (e) { toastError(e); }
+                });
+            },
+        });
+    }
+
+    async function openWeightSheet() {
+        if (!state.weight) {
+            try { state.weight = await get(`/api/weight?days=30&end=${state.date}`); } catch (e) { toastError(e); return; }
+        }
+        const entries = state.weight.entries || [];
+        const existing = entries.find((e) => e.log_date === state.date) || null;
+        const last = existing || entries[entries.length - 1];
+        const start = existing ? existing.weight_kg : last ? last.weight_kg : (state.profile && state.profile.weight_kg) || 70;
+        openSheet({
+            title: `Weight · ${dayLabel(state.date)}`,
+            body: `
+                <div class="budget-stepper">
+                    <button class="icon-btn" data-role="step" data-step="-0.1" aria-label="Decrease by 0.1 kg">${icon("minus")}</button>
+                    <span class="input-unit" style="flex:1"><input class="input" data-role="kg" inputmode="decimal" value="${start.toFixed(1)}" aria-label="Weight in kg"><span>kg</span></span>
+                    <button class="icon-btn" data-role="step" data-step="0.1" aria-label="Increase by 0.1 kg">${icon("plus")}</button>
+                </div>
+                <p class="muted small" style="margin:0">Weigh yourself at the same time of day, ideally in the morning. Daily ups and downs are mostly water; the 7-day average shows the real trend.</p>
+                ${existing ? '<button class="btn btn-ghost btn-sm" data-role="remove" style="justify-self:start">Remove this weigh-in</button>' : ""}
+                <p class="form-error" data-role="error" hidden></p>`,
+            foot: '<button class="btn btn-primary btn-block" data-role="save">Save weight</button>',
+            onMount(el) {
+                const input = el.querySelector('[data-role="kg"]');
+                el.querySelectorAll('[data-role="step"]').forEach((b) => b.addEventListener("click", () => {
+                    const v = num(input.value) || start;
+                    input.value = clamp(Math.round((v + parseFloat(b.dataset.step)) * 10) / 10, 20, 400).toFixed(1);
+                    vibrate(5);
+                }));
+                el.querySelector('[data-role="save"]').addEventListener("click", async (ev) => {
+                    const kg = num(input.value);
+                    const err = el.querySelector('[data-role="error"]');
+                    if (kg === null || kg < 20 || kg > 400) { err.textContent = "Enter a weight between 20 and 400 kg."; err.hidden = false; return; }
+                    setBusy(ev.currentTarget, true);
+                    try {
+                        await put("/api/weight", { weight_kg: kg, log_date: state.date });
+                        await back();
+                        state.profile = null;
+                        await Promise.all([afterBalanceChange(), loadGoals()]);
+                        toast(`Weight saved: ${kg.toFixed(1)} kg`);
+                    } catch (e) { toastError(e); setBusy(ev.currentTarget, false); }
+                });
+                const rm = el.querySelector('[data-role="remove"]');
+                if (rm) rm.addEventListener("click", async () => {
+                    try {
+                        await del(`/api/weight/${state.date}`);
+                        await back();
+                        await afterBalanceChange();
+                        toast("Weigh-in removed");
+                    } catch (e) { toastError(e); }
+                });
+            },
+        });
     }
 
     // ══════════════════════════════════════════
@@ -650,6 +1044,7 @@
                     <button class="add-tile" data-action="describe">${icon("pen-line")}<span><strong>Type it in</strong><small>Say what you ate, AI fills the macros</small></span></button>
                     <button class="add-tile" data-action="tab-foods">${icon("bowl")}<span><strong>My foods</strong><small>Saved and recent foods</small></span></button>
                 </div>
+                <button class="add-row" data-action="add-burn-from-sheet">${icon("flame")}<span><strong>Calories burned</strong><small>From your Apple Watch, Fitbit or other tracker</small></span>${icon("chev-right")}</button>
                 <div id="add-recent"></div>`,
             onMount: async (el) => {
                 try {
@@ -868,12 +1263,19 @@
         });
     }
 
-    async function relogRecent(food, mealType) {
+    /** Meal payloads for logging a saved or recent food. Favourite meals expand to their items. */
+    function foodToMeals(f, factor = 1, source = "recent") {
+        const scale = (x) => ({
+            name: x.name, calories: r1(x.calories * factor), protein: r1((x.protein || 0) * factor), carbs: r1((x.carbs || 0) * factor),
+            fat: r1((x.fat || 0) * factor), fiber: r1((x.fiber || 0) * factor), weight_g: Math.round((x.weight_g || 0) * factor),
+        });
+        if (f.items && f.items.length) return f.items.map((i) => ({ ...scale(i), source }));
+        return [{ ...scale(f), barcode: f.barcode || null, nutri_grade: f.nutri_grade || null, source }];
+    }
+
+    async function relogRecent(food, mealType, source = "recent") {
         try {
-            const { times_logged, ...rest } = food;
-            await logMeals([{ name: rest.name, calories: rest.calories, protein: rest.protein, carbs: rest.carbs, fat: rest.fat, fiber: rest.fiber || 0,
-                weight_g: rest.weight_g, barcode: rest.barcode || null, nutri_grade: rest.nutri_grade || null, source: "recent" }],
-            { mealType: mealType || currentMealType() });
+            await logMeals(foodToMeals(food, 1, source), { mealType: mealType || currentMealType(), groupName: food.items ? food.name : null });
             await refreshDay();
         } catch (e) { toastError(e); }
     }
@@ -893,10 +1295,31 @@
 
     /** Breakfast/Lunch/Dinner/Snacks chips that move a logged meal immediately. */
     function mealMoverHtml(meal) {
-        return `<div class="meal-mover"><p class="field-row-label">Logged under</p>${mealTypeSeg(mealTypeOf(meal), "move_type")}</div>`;
+        return `<div class="meal-mover"><p class="field-row-label">Logged under</p>${mealTypeSeg(mealTypeOf(meal), "move_type")}
+            <label class="move-date">${icon("calendar")}<span>Day</span>
+                <input type="date" class="input" data-role="move-date" value="${esc(meal.meal_date)}" max="${todayIso()}" aria-label="Move to another day">
+            </label></div>`;
     }
 
     function wireMealMover(el, meal) {
+        el.querySelector('[data-role="move-date"]').addEventListener("change", async (e) => {
+            const to = e.target.value;
+            if (!to || to === meal.meal_date) return;
+            if (to > todayIso()) { toast("Meals can't be moved to a future day.", { error: true }); e.target.value = meal.meal_date; return; }
+            const from = meal.meal_date;
+            const move = (date) => meal.is_group
+                ? patch(`/api/meals/groups/${encodeURIComponent(meal.group_token)}`, { meal_date: date })
+                : patch(`/api/meals/${meal.id}`, { meal_date: date });
+            try {
+                await move(to);
+                await back();
+                await refreshDay();
+                toast(`Moved to ${dayLabel(to)}`, {
+                    action: "Undo",
+                    onAction: async () => { try { await move(from); await refreshDay(); } catch (err) { toastError(err); } },
+                });
+            } catch (err) { toastError(err); e.target.value = from; }
+        });
         el.querySelector(".meal-mover").addEventListener("click", async (e) => {
             const chip = e.target.closest('[data-group="move_type"]');
             if (!chip) return;
@@ -999,6 +1422,10 @@
                     <input class="input" data-role="gname" maxlength="200" value="${esc(meal.name)}"></label>
                 <div class="detail-total"><span class="big-num">${fmt(meal.calories)}</span><span class="hero-caption">kcal</span></div>
                 ${detailMacros(meal)}
+                <div class="row-actions">
+                    <button class="btn btn-secondary btn-sm" data-role="group-again">${icon("repeat")}Log again${state.date !== todayIso() ? " today" : ""}</button>
+                    <button class="btn btn-secondary btn-sm" data-role="favourite">${icon("star")}Save as favourite</button>
+                </div>
                 <div>
                     <p class="field-row-label">Items · tap one to fix it</p>
                     <ul class="item-list">${meal.items.map(groupItemRow).join("")}</ul>
@@ -1007,6 +1434,30 @@
                    <button class="btn btn-primary btn-grow" data-role="save">Save</button>`,
             onMount(el) {
                 wireMealMover(el, meal);
+                el.querySelector('[data-role="group-again"]').addEventListener("click", async () => {
+                    try {
+                        await post("/api/meals/batch", {
+                            meals: meal.items.map((i) => ({ name: i.name, calories: i.calories, protein: i.protein, carbs: i.carbs, fat: i.fat,
+                                fiber: i.fiber || 0, weight_g: i.weight_g, meal_date: todayIso(), source: meal.source || "recent" })),
+                            group_name: meal.name, meal_type: mealTypeOf(meal),
+                        });
+                        await back();
+                        if (state.date !== todayIso()) await changeDay(0); else await refreshDay();
+                        toast(`Logged ${fmt(meal.calories)} kcal again`);
+                    } catch (e) { toastError(e); }
+                });
+                el.querySelector('[data-role="favourite"]').addEventListener("click", async (ev) => {
+                    const btn = ev.currentTarget;
+                    try {
+                        await post("/api/presets", {
+                            name: el.querySelector('[data-role="gname"]').value.trim() || meal.name, calories: 0,
+                            items: meal.items.map((i) => ({ name: i.name, calories: i.calories, protein: i.protein, carbs: i.carbs, fat: i.fat, fiber: i.fiber || 0, weight_g: i.weight_g })),
+                        });
+                        btn.disabled = true;
+                        btn.innerHTML = `${icon("check")}Saved to My foods`;
+                        state.presets = [];
+                    } catch (e) { toastError(e); }
+                });
                 el.querySelector('[data-role="save"]').addEventListener("click", async (ev) => {
                     setBusy(ev.currentTarget, true);
                     try {
@@ -1679,7 +2130,11 @@
         body.innerHTML = '<div class="skel" style="height:80px;margin-bottom:24px"></div><div class="skel" style="height:200px"></div>';
         const days = state.range;
         try {
-            const [hist, goals] = await Promise.all([get(`/api/history?days=${days}&end=${todayIso()}`), state.goals || loadGoals()]);
+            const [hist, goals, weight] = await Promise.all([
+                get(`/api/history?days=${days}&end=${todayIso()}`),
+                state.goals || loadGoals(),
+                get(`/api/weight?days=${Math.max(days, 14)}&end=${todayIso()}`),
+            ]);
             if (state.tab !== "progress" || state.range !== days) return;
             const budget = goals.calories;
             const byDate = Object.fromEntries(hist.days.map((d) => [d.date, d]));
@@ -1737,6 +2192,7 @@
                     </div>
                     <p class="chart-sub" style="margin:12px 0 0">Fiber: <strong style="color:var(--ink)">${fmt(logged.reduce((s, d) => s + d.fb, 0) / logged.length)} g</strong> a day on average, target ${fmt(goals.fiber || 28)} g.</p>
                 </section>` : ""}
+                ${weightChartHtml(weight, Math.max(days, 14))}
                 <section>
                     <h2 class="section-label">Days</h2>
                     <ul class="day-list">${logged.slice().reverse().map((d) => `
@@ -1747,10 +2203,66 @@
                         </button></li>`).join("")}</ul>
                 </section>`;
             wireChart($("kcal-chart"), series, budget);
+            wireWeightChart(weight);
         } catch (e) {
             body.innerHTML = '<p class="empty-note">Couldn\'t load your history.</p>';
             toastError(e);
         }
+    }
+
+    function weightChartHtml(weight, days) {
+        const entries = (weight && weight.entries) || [];
+        if (!entries.length) return "";
+        const W = 340, H = 150, top = 12, bottom = 22, left = 34;
+        const vals = entries.flatMap((e) => [e.weight_kg, e.trend_kg]);
+        const lo = Math.floor(Math.min(...vals) - 0.5), hi = Math.ceil(Math.max(...vals) + 0.5);
+        const start = new Date(`${addDays(todayIso(), -(days - 1))}T12:00:00`).getTime();
+        const span = Math.max(1, days - 1) * 86400000;
+        const x = (iso) => left + ((new Date(`${iso}T12:00:00`).getTime() - start) / span) * (W - left - 6);
+        const y = (v) => top + (1 - (v - lo) / (hi - lo)) * (H - top - bottom);
+        const trend = entries.map((e, i) => `${i ? "L" : "M"}${x(e.log_date).toFixed(1)},${y(e.trend_kg).toFixed(1)}`).join(" ");
+        const dots = entries.map((e, i) => `<circle class="wt-dot" data-i="${i}" cx="${x(e.log_date).toFixed(1)}" cy="${y(e.weight_kg).toFixed(1)}" r="4"/>`).join("");
+        const hits = entries.map((e, i) => `<circle class="bar-hit" data-i="${i}" cx="${x(e.log_date).toFixed(1)}" cy="${y(e.weight_kg).toFixed(1)}" r="14"/>`).join("");
+        const ch = weight.change_range;
+        return `
+            <section class="chart-card">
+                <h2 class="chart-title">Weight</h2>
+                <p class="chart-sub">${weight.latest.weight_kg.toFixed(1)} kg now · 7-day average ${weight.latest.trend_kg.toFixed(1)} kg${ch !== null && ch !== undefined ? ` · ${ch > 0 ? "+" : ""}${ch.toFixed(1)} kg over ${days} days` : ""}</p>
+                <div class="chart" id="weight-chart">
+                    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Weight over the last ${days} days">
+                        <line class="grid-line" x1="${left}" x2="${W}" y1="${y(hi)}" y2="${y(hi)}"/>
+                        <line class="grid-line" x1="${left}" x2="${W}" y1="${y(lo)}" y2="${y(lo)}"/>
+                        <text class="axis-text" x="0" y="${y(hi) + 4}">${hi} kg</text>
+                        <text class="axis-text" x="0" y="${y(lo) + 4}">${lo} kg</text>
+                        <path class="wt-trend" d="${trend}"/>
+                        ${dots}${hits}
+                    </svg>
+                </div>
+                <div class="legend">
+                    <span><i class="dot"></i>Weigh-ins</span>
+                    <span><i style="--c:var(--saffron)"></i>7-day average</span>
+                </div>
+            </section>`;
+    }
+
+    function wireWeightChart(weight) {
+        const root = $("weight-chart");
+        if (!root) return;
+        const entries = weight.entries;
+        let tip = null;
+        const show = (i) => {
+            const e = entries[i];
+            if (!tip) { tip = document.createElement("div"); tip.className = "chart-tip"; root.appendChild(tip); }
+            tip.innerHTML = `${esc(dayLabel(e.log_date))}<br><strong>${e.weight_kg.toFixed(1)} kg</strong> · avg ${e.trend_kg.toFixed(1)}`;
+            const hit = root.querySelector(`.bar-hit[data-i="${i}"]`).getBoundingClientRect();
+            const box = root.getBoundingClientRect();
+            tip.style.left = `${clamp(hit.left + hit.width / 2 - box.left, 70, box.width - 70)}px`;
+            tip.style.top = "0px";
+        };
+        const svg = root.querySelector("svg");
+        svg.addEventListener("pointerdown", (ev) => { const i = ev.target.dataset && ev.target.dataset.i; if (i !== undefined) show(Number(i)); });
+        svg.addEventListener("pointerover", (ev) => { const i = ev.target.dataset && ev.target.dataset.i; if (i !== undefined) show(Number(i)); });
+        svg.addEventListener("pointerleave", (ev) => { if (ev.pointerType === "mouse" && tip) { tip.remove(); tip = null; } });
     }
 
     function barChart(series, budget) {
@@ -1838,7 +2350,7 @@
             <li class="food-row">
                 <button class="food-row-main" data-action="food-open" data-kind="${kind}" data-index="${i}">
                     <span class="food-row-name">${esc(f.name)}</span>
-                    <span class="food-row-meta">${f.nutri_grade ? nsMini(f.nutri_grade) : ""}<span>${fmt(f.calories)} kcal · P ${fmt(f.protein)} · C ${fmt(f.carbs)} · F ${fmt(f.fat)}${f.fiber ? ` · Fiber ${fmt(f.fiber)}` : ""}</span>${f.times_logged > 1 ? `<span>· ${f.times_logged}×</span>` : ""}</span>
+                    <span class="food-row-meta">${f.items ? `<span class="tag">${icon("star")}${f.items.length} items</span>` : ""}${f.nutri_grade ? nsMini(f.nutri_grade) : ""}<span>${fmt(f.calories)} kcal · P ${fmt(f.protein)} · C ${fmt(f.carbs)} · F ${fmt(f.fat)}${f.fiber ? ` · Fiber ${fmt(f.fiber)}` : ""}</span>${f.times_logged > 1 ? `<span>· ${f.times_logged}×</span>` : ""}</span>
                 </button>
                 <button class="food-add" data-action="food-log" data-kind="${kind}" data-index="${i}" aria-label="Log ${esc(f.name)}">${icon("plus")}</button>
             </li>`;
@@ -1873,6 +2385,7 @@
             body: `
                 <div class="detail-total"><span class="big-num" data-role="kcal"></span><span class="hero-caption">kcal</span></div>
                 <div class="detail-macros" data-role="macros"></div>
+                ${f.items ? `<ul class="fav-items">${f.items.map((i) => `<li><span>${esc(i.name)}</span><span>${fmt(i.calories)} kcal</span></li>`).join("")}</ul>` : ""}
                 <div><p class="field-row-label">Portion</p><div class="chips">
                     ${[0.5, 1, 1.5, 2, 3].map((x) => `<button type="button" class="chip ${x === 1 ? "is-on" : ""}" data-action="pick-chip" data-group="factor" data-value="${x}">${x === 1 ? "1 portion" : `×${x}`}</button>`).join("")}
                 </div></div>
@@ -1889,9 +2402,8 @@
                 el.querySelector('[data-role="log"]').addEventListener("click", async (ev) => {
                     setBusy(ev.currentTarget, true);
                     try {
-                        const notify = await logMeals([{ name: f.name, calories: r1(f.calories * factor), protein: r1(f.protein * factor), carbs: r1(f.carbs * factor),
-                            fat: r1(f.fat * factor), fiber: r1((f.fiber || 0) * factor), weight_g: Math.round((f.weight_g || 0) * factor), barcode: f.barcode || null,
-                            nutri_grade: f.nutri_grade || null, source: kind === "preset" ? "preset" : "recent" }], { mealType: chipValue(el, "meal_type"), deferToast: true });
+                        const notify = await logMeals(foodToMeals(f, factor, kind === "preset" ? "preset" : "recent"),
+                            { mealType: chipValue(el, "meal_type"), groupName: f.items ? f.name : null, deferToast: true });
                         await back();
                         notify();
                         await refreshDay();
@@ -2150,6 +2662,14 @@
         "day-today": () => { if (state.date !== todayIso()) changeDay(0); },
         "goto-day": (el) => { state.date = el.dataset.date; state.day = null; switchTab("today"); renderToday(); refreshDay().catch(toastError); },
         water: (el) => addWater(parseInt(el.dataset.ml, 10)),
+        "today-view": (el) => setTodayView(el.dataset.view),
+        "add-burn": () => openBurnSheet(),
+        "add-burn-from-sheet": () => openBurnSheet(null, { replace: true }),
+        "edit-burn": (el) => {
+            const entry = state.balance && state.balance.entries.find((x) => String(x.id) === el.dataset.id);
+            if (entry) openBurnSheet(entry);
+        },
+        "log-weight": () => openWeightSheet(),
 
         "open-add": (el) => openAddSheet(el.dataset.mealType),
         "open-meal": (el) => openMealSheet(el.dataset.key),
@@ -2212,7 +2732,7 @@
         "food-open": (el) => openFoodSheet(el.dataset.kind, Number(el.dataset.index)),
         "food-log": (el) => {
             const f = foodFrom(el.dataset.kind, Number(el.dataset.index));
-            if (f) relogRecent(f, guessMealType());
+            if (f) relogRecent(f, guessMealType(), el.dataset.kind === "preset" ? "preset" : "recent");
         },
         "new-preset": () => openNewPreset(),
         range: (el) => {

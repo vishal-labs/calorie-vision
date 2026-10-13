@@ -285,6 +285,66 @@ select.input { background-image: linear-gradient(45deg, transparent 50%, var(--i
 .fiber-val strong { color: var(--ink); font-family: var(--font-num); font-size: 16px; font-weight: 650; }
 .kv-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 
+/* ─── Today: Food | Balance switch ─── */
+.today-switch { margin: 6px 0 0; }
+
+/* ─── Balance ─── */
+.balance-hero { padding-bottom: 18px; }
+.balance-word.is-deficit { color: var(--good); }
+.balance-word.is-surplus { color: var(--over); }
+.balance-sub { margin: 12px 0 0; color: var(--ink-2); font-size: 15px; max-width: 42ch; }
+.btn-text.inline { padding: 0; font-size: inherit; color: var(--ink); }
+.muted-num { color: var(--ink-2); }
+.is-over-text { color: var(--over); }
+.equation { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: 6px; padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.eq-cell { display: grid; gap: 2px; min-width: 0; }
+.eq-val { font-family: var(--font-num); font-weight: 700; font-stretch: 85%; font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.eq-label { font-size: 12.5px; color: var(--ink-3); line-height: 1.25; }
+.eq-op { font-family: var(--font-num); font-size: 22px; color: var(--ink-3); padding-top: 1px; }
+.exercise-line { margin: 12px 0 0; font-size: 14px; color: var(--ink-2); }
+.exercise-line strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+.balance-section { padding-top: 22px; }
+.burn-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.burn-row { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.burn-list li:last-child .burn-row { border-bottom: 0; }
+.burn-icon { width: 36px; height: 36px; border-radius: 10px; background: var(--over-soft); color: var(--over); display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.burn-icon svg { width: 20px; height: 20px; }
+.burn-main { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.burn-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.burn-meta { font-size: 13px; color: var(--ink-3); }
+.burn-kcal { font-family: var(--font-num); font-weight: 650; font-size: 19px; font-stretch: 85%; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.burn-kcal small { font-family: var(--font-ui); font-size: 12px; color: var(--ink-3); font-weight: 500; margin-left: 2px; }
+.burn-input { font-family: var(--font-num); font-size: 30px; font-weight: 700; font-stretch: 85%; min-height: 64px; }
+.weight-now { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
+.weight-val { font-family: var(--font-num); font-weight: 750; font-stretch: 80%; font-size: 40px; line-height: 1; font-variant-numeric: tabular-nums; }
+.weight-val small { font-family: var(--font-ui); font-size: 15px; font-weight: 500; color: var(--ink-3); margin-left: 3px; }
+.weight-meta { font-size: 13.5px; color: var(--ink-3); line-height: 1.45; }
+.is-down { color: var(--good); }
+.is-up { color: var(--ink-2); }
+.chart .wk-bar.is-deficit { fill: var(--good); }
+.chart .wk-bar.is-surplus { fill: var(--over); }
+.chart .wk-empty { fill: var(--surface-3); }
+.chart.has-focus .wk-bar:not(.is-focus) { opacity: 0.45; }
+.chart .wt-trend { fill: none; stroke: var(--saffron); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .wt-dot { fill: var(--ink-3); stroke: var(--bg); stroke-width: 2; }
+.legend i.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+
+/* Add sheet row for calories burned */
+.add-row { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; padding: 14px 16px; border-radius: var(--r-m); background: var(--surface-2); }
+.add-row:hover { background: var(--surface-3); }
+.add-row > svg:first-child { color: var(--over); width: 24px; height: 24px; }
+.add-row > svg:last-child { color: var(--ink-3); width: 18px; height: 18px; }
+.add-row span { flex: 1; min-width: 0; }
+.add-row strong { display: block; font-size: 16px; }
+.add-row small { display: block; color: var(--ink-3); font-size: 13px; }
+
+/* Favourite meal items, move-to-day */
+.fav-items { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.fav-items li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.move-date { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--ink-2); font-size: 14px; }
+.move-date svg { width: 18px; height: 18px; color: var(--ink-3); }
+.move-date .input { flex: 1; min-height: 42px; padding: 8px 12px; color-scheme: dark; }
+
 /* ─── Water ─── */
 .water { padding: 16px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .water-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }

@@ -11,6 +11,7 @@ Barcode lookups hit the real Open Food Facts API. The barcode reader is tested
 with the native BarcodeDetector removed, i.e. the ZXing/WebAssembly path iPhones use,
 both from a photo and from a live (fake) camera stream.
 """
+import datetime
 import json
 import os
 import shutil
@@ -324,6 +325,62 @@ def main():
         shot(page, "14-me")
         page.click('[data-action="use-recommended"]')
         expect(page.locator(".recommend")).to_have_count(0)
+
+        # Balance: calories burned from a watch, net/deficit, weight
+        page.click('[data-action="tab"][data-tab="today"]')
+        page.click('[data-action="today-view"][data-view="balance"]')
+        expect(page.locator("#view-balance .balance-sub")).to_be_visible()
+        shot(page, "16-balance-empty")
+        page.click('#view-balance [data-action="add-burn"]')
+        page.fill('.sheet [data-role="kcal"]', "620")
+        page.click('.sheet [data-role="source"][data-value="apple_watch"]')
+        page.fill('.sheet [data-role="note"]', "Evening run")
+        page.click('.sheet [data-role="save"]')
+        expect(page.locator(".burn-name", has_text="Evening run")).to_be_visible()
+        expect(page.locator(".balance-word")).to_be_visible()  # profile known, so resting burn is estimated
+        expect(page.locator(".exercise-line")).to_contain_text("620 exercise")
+        page.click('[data-action="log-weight"]')
+        page.fill('.sheet [data-role="kg"]', "73.6")
+        page.click('.sheet [data-role="step"][data-step="-0.1"]')
+        page.click('.sheet [data-role="save"]')
+        expect(page.locator(".weight-val")).to_contain_text("73.5")
+        expect(page.locator("#week-chart svg")).to_be_visible()
+        shot(page, "17-balance")
+        page.screenshot(path=str(SHOTS / "17b-balance-full.png"), full_page=True)
+        page.click(".burn-row")
+        page.click('.sheet [data-role="kind"][data-value="total"]')
+        page.fill('.sheet [data-role="kcal"]', "2900")
+        page.click('.sheet [data-role="save"]')
+        expect(page.locator(".eq-label", has_text="Total burned")).to_be_visible()
+        expect(page.locator(".balance-word")).to_have_text("kcal deficit")
+        page.reload(wait_until="networkidle")
+        expect(page.locator("#view-balance")).to_be_visible()  # view choice is remembered
+        page.click('[data-action="today-view"][data-view="food"]')
+        expect(page.locator("#view-food")).to_be_visible()
+
+        # Favourite meal: save the AI meal, then log it from My foods
+        page.click('.meal-row:has-text("Chicken rice bowl")')
+        page.click('.sheet [data-role="favourite"]')
+        expect(page.locator('.sheet [data-role="favourite"]')).to_contain_text("Saved")
+        page.keyboard.press("Escape")
+        expect(page.locator(".sheet")).to_have_count(0)
+        page.click('[data-action="tab"][data-tab="foods"]')
+        fav = page.locator(".food-row", has_text="Chicken rice bowl").filter(has=page.locator(".tag", has_text="2 items"))
+        expect(fav).to_be_visible()
+        shot(page, "18-favourite")
+        fav.locator(".food-add").click()
+        expect(page.locator(".toast")).to_contain_text("Logged")
+        page.click('[data-action="tab"][data-tab="today"]')
+        expect(page.locator(".meal-row-name", has_text="Chicken rice bowl")).to_have_count(2)
+
+        # Move a meal to yesterday, then undo
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        page.click('.meal-row:has-text("Greek yogurt")')
+        page.fill('.sheet [data-role="move-date"]', yesterday)
+        expect(page.locator(".toast")).to_contain_text("Moved to Yesterday")
+        expect(page.locator(".meal-row-name", has_text="Greek yogurt")).to_have_count(0)
+        page.click(".toast button")
+        expect(page.locator(".meal-row-name", has_text="Greek yogurt")).to_have_count(1)
 
         # Session survives reload (token in localStorage)
         page.reload(wait_until="networkidle")

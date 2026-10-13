@@ -90,6 +90,7 @@ class MealUpdate(BaseModel):
 class MealGroupUpdate(BaseModel):
     group_name: str | None = Field(None, max_length=200)
     meal_type: Optional[MealType] = None
+    meal_date: date | None = None
 
 
 class MealBreakdownItem(BaseModel):
@@ -147,8 +148,20 @@ class RecentFood(BaseModel):
     times_logged: int
 
 
+class PresetItem(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    calories: float = Kcal
+    protein: float = Grams
+    carbs: float = Grams
+    fat: float = Grams
+    fiber: float = Field(0, ge=0, le=500)
+    weight_g: float = Field(0, ge=0, le=20000)
+
+
 class PresetCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
+    # For a multi-item favourite the totals are computed from `items`.
+    items: list[PresetItem] | None = Field(None, max_length=30)
     calories: float = Kcal
     protein: float = Grams
     carbs: float = Grams
@@ -168,6 +181,15 @@ class PresetResponse(BaseModel):
     fat: float
     fiber: ZeroIfNone = 0
     description: str
+    items: list[PresetItem] | None = None
+
+    @field_validator("items", mode="before")
+    @classmethod
+    def parse_items(cls, v):
+        if isinstance(v, str):
+            import json
+            return json.loads(v) or None
+        return v
 
 
 class BudgetResponse(BaseModel):
@@ -235,3 +257,78 @@ class WaterResponse(BaseModel):
     log_date: date
     amount_ml: int
     goal_ml: int
+
+
+# ── Calories burned & energy balance ──
+ActivityKind = Literal["active", "total"]
+ActivitySource = Literal["apple_watch", "fitbit", "garmin", "other"]
+
+
+class ActivityCreate(BaseModel):
+    calories: float = Field(..., gt=0, le=10000)
+    kind: ActivityKind = "active"
+    source: Optional[ActivitySource] = None
+    note: str | None = Field(None, max_length=100)
+    log_date: date = Field(default_factory=date.today)
+
+
+class ActivityUpdate(BaseModel):
+    calories: float | None = Field(None, gt=0, le=10000)
+    kind: Optional[ActivityKind] = None
+    source: Optional[ActivitySource] = None
+    note: str | None = Field(None, max_length=100)
+    log_date: date | None = None
+
+
+class ActivityResponse(BaseModel):
+    model_config = {"from_attributes": True}
+    id: int
+    log_date: date
+    calories: float
+    kind: str
+    source: str | None = None
+    note: str | None = None
+
+
+class BalanceDay(BaseModel):
+    date: date
+    eaten: float
+    active: float
+    total_logged: float
+    budget: int
+    # How "burned" was worked out: "total" (logged), "bmr_plus_active" (profile estimate),
+    # "active_only" (no resting estimate possible) or "none" (nothing logged).
+    basis: Literal["total", "bmr_plus_active", "active_only", "none"]
+    resting_estimate: float | None = None
+    burned: float | None = None          # best estimate of total burn, if known
+    balance: float | None = None         # eaten - burned (negative = deficit)
+    net: float                           # eaten - logged burn (active or total)
+    budget_with_exercise: float          # budget + active calories
+    left_with_exercise: float
+
+
+class BalanceResponse(BalanceDay):
+    entries: list[ActivityResponse]
+
+
+class BalanceHistory(BaseModel):
+    days: list[BalanceDay]
+
+
+# ── Weight ──
+class WeightUpsert(BaseModel):
+    weight_kg: float = Field(..., ge=20, le=400)
+    log_date: date = Field(default_factory=date.today)
+
+
+class WeightEntry(BaseModel):
+    log_date: date
+    weight_kg: float
+    trend_kg: float  # average of entries in the 7 days up to this one
+
+
+class WeightHistory(BaseModel):
+    entries: list[WeightEntry]
+    latest: WeightEntry | None = None
+    change_7d: float | None = None   # trend now vs ~7 days earlier
+    change_range: float | None = None  # trend now vs start of the window

@@ -36,7 +36,10 @@ docker compose logs app | grep "reset code"
 - **Snap a meal**: photo → optional hint → per-item estimate. Adjust portions, fix or remove items, then log. Logged AI meals stay editable item by item.
 - **Type it in**: forgot the photo? Write what you ate in one line ("2 rotis, 1 bowl dal, 100 g paneer") and the AI splits it into items with macros on the same review screen. It logs to whichever day you're viewing, so missed meals can be backfilled. "Enter them yourself" still opens the plain manual form.
 - **Barcode**: live scanning on Android and iPhone (native `BarcodeDetector`, or the bundled ZXing WebAssembly reader), scanning from a photo, or typing the number. Product data comes from [Open Food Facts](https://world.openfoodfacts.org) and is cached for 7 days. Grades use the official one when available; otherwise they're computed with the 2023 Nutri-Score algorithm (`nutriscore.py`). If even that isn't possible (no nutrition facts), the AI rates the product from its name, ingredients and package photo, and estimates the nutrition. The result is labelled "rated by AI" and cached, so each product is rated once.
-- **Progress**: 7- and 30-day charts, average intake, days within budget, streak, macro split.
+- **Balance** (switch at the top of Today): add the calories your Apple Watch, Fitbit or Garmin says you burned, marked as *Active* (exercise only) or *Total* (includes resting). You see eaten − burned as a deficit or surplus with the kg equivalent. When only active calories are logged, resting burn is estimated from your profile. Also your budget topped up by exercise, a 7-day deficit/surplus chart, and weigh-ins with a 7-day average.
+- **Progress**: 7- and 30-day charts, average intake, days within budget, streak, macro split, weight trend.
+- **Favourite meals**: save any multi-item meal and re-log the whole thing in one tap from My foods. Grouped meals also have "Log again".
+- **Fix the day**: move any logged meal to another day (date picker in the meal sheet), with undo.
 - **My foods**: saved foods and recently logged foods, logged again in one tap.
 - **You**: daily budget (with a suggestion based on your profile), body profile, backups, password.
 - Undo on every log and delete. The Android back button closes sheets and screens. Installable as a home-screen app.
